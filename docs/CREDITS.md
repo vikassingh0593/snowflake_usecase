@@ -33,7 +33,7 @@ re-read at the end of the build for the Part 16 report.
 
 | Part | Budgeted | Actual WH | Actual serverless | Total | Delta | Notes |
 |---|---|---|---|---|---|---|
-| 0 — feature probe | 1 | | | | | metadata queries only, should be ~0 |
+| 0 — feature probe | 1 | | | | | authoring + doc checks: **0 consumed so far** (no account access from the build container). `sql/p0_probe.sql` estimated 0.03–0.07 WH credits + ~11 single-row AI calls |
 | 1 — bootstrap | 3 | | | | | |
 | 2 — docker + generators | 2 | | | | | local compute; Snowflake side is `GENERATOR` only |
 | 3 — streaming ingest | 12 | | | | | serverless-heavy: Snowpipe Streaming + file mode side by side |

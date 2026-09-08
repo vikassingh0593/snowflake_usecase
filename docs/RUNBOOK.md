@@ -9,7 +9,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Part | Status | Contents | Exit criteria |
 |---|---|---|---|
-| **0** | ⬜ | **Feature probe.** Availability checks, Snowsight nav screenshots, write `docs/AVAILABLE.md`. **Before anything else** — it decides Parts 10, 12, 13 | `docs/AVAILABLE.md` committed with every verdict filled |
+| **0** | 🟡 | **Feature probe.** Availability checks, Snowsight nav screenshots, write `docs/AVAILABLE.md`. **Before anything else** — it decides Parts 10, 12, 13 | `docs/AVAILABLE.md` committed with every verdict filled |
 | **1** | ⬜ | Azure resources (RG, GPv2 SA, 4 containers, queue, Event Grid), Snowflake bootstrap (db, schemas, warehouses), RBAC, budget + resource monitor, query-tag convention, 3 integrations consented | `SELECT SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')` green |
 | **2** | ⬜ | Docker: Postgres 16, Redpanda, Kafka Connect + Debezium + Snowflake sink **v4**. Python data generator + the in-Snowflake `GENERATOR` variant | producers running, topics populated |
 | **3** | ⬜ | Ingestion A — streaming: mechanisms 1, 2, 3 | rows in `RAW`; latency/credit comparison recorded in `OPS` |

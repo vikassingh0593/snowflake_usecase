@@ -152,6 +152,22 @@ covered in `docs/DATASTREAM.md` as prose only) · Adaptive Compute · Snowflake 
 `dbt deps` runs **locally**; commit `dbt_packages/`. Running deps inside Snowflake
 Workspaces needs an external access integration (UNVERIFIED; avoid).
 
+### Execution model — established by test in Part 0, not assumed
+
+This Claude Code session runs in a cloud container whose egress proxy returns **403
+CONNECT** for `*.snowflakecomputing.com`, `management.azure.com`, `docs.snowflake.com`
+and `api.open-meteo.com`. Reachable: GitHub, Docker Hub, PyPI. `az` and the Snowflake
+CLI are not installed; Docker and Python 3.11 are.
+
+**Consequence: Claude authors, the operator executes.** Every Snowflake statement and
+`az` command is delivered as a reviewed script; the operator runs it and pastes the
+output back. This does not relax the working agreement — it makes the "show the
+statement and get a yes" rule the only possible mode anyway.
+
+Live Snowflake doc checks go through web search, which reaches doc pages as summaries.
+Direct page fetches are blocked, so quote release-note dates and mark anything
+search-sourced rather than doc-read as such.
+
 ### Warehouses / roles / service users
 `WH_INGEST_XS` · `WH_TRANSFORM_XS` (dbt outer session **and** target) · `WH_APP_XS`
 `QC_ADMIN` > `QC_LOADER`, `QC_ENGINEER`, `QC_ANALYST`
