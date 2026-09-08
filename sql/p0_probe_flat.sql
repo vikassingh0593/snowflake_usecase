@@ -6,6 +6,78 @@
 
 ALTER SESSION SET QUERY_TAG = 'p00:probe';
 
+-- [show.warehouses]
+SHOW WAREHOUSES;
+
+-- [show.resource_monitors]
+SHOW RESOURCE MONITORS;
+
+-- [show.integrations]
+SHOW INTEGRATIONS;
+
+-- [show.external_volumes]
+SHOW EXTERNAL VOLUMES;
+
+-- [show.dynamic_tables]
+SHOW DYNAMIC TABLES IN ACCOUNT;
+
+-- [show.iceberg_tables]
+SHOW ICEBERG TABLES IN ACCOUNT;
+
+-- [show.hybrid_tables]
+SHOW HYBRID TABLES IN ACCOUNT;
+
+-- [show.streamlits]
+SHOW STREAMLITS IN ACCOUNT;
+
+-- [show.cortex_search_services]
+SHOW CORTEX SEARCH SERVICES IN ACCOUNT;
+
+-- [show.semantic_views]
+SHOW SEMANTIC VIEWS IN ACCOUNT;
+
+-- [show.agents_cowork]
+SHOW AGENTS IN ACCOUNT;
+
+-- [show.git_repositories]
+SHOW GIT REPOSITORIES IN ACCOUNT;
+
+-- [show.dbt_projects]
+SHOW DBT PROJECTS IN ACCOUNT;
+
+-- [show.application_packages]
+SHOW APPLICATION PACKAGES;
+
+-- [show.managed_accounts_reader]
+SHOW MANAGED ACCOUNTS;
+
+-- [show.shares]
+SHOW SHARES;
+
+-- [show.tags]
+SHOW TAGS IN ACCOUNT;
+
+-- [show.alerts]
+SHOW ALERTS IN ACCOUNT;
+
+-- [show.notebooks]
+SHOW NOTEBOOKS IN ACCOUNT;
+
+-- [show.ml_classes]
+SHOW CLASSES IN SNOWFLAKE.ML;
+
+-- [show.cortex_ai_functions]
+SHOW FUNCTIONS LIKE 'AI\_%' IN SCHEMA SNOWFLAKE.CORTEX;
+
+-- [show.snowflake_db_roles]
+SHOW DATABASE ROLES IN DATABASE SNOWFLAKE;
+
+-- [show.budgets_class]
+SHOW CLASSES IN SNOWFLAKE.CORE;
+
+-- [show.data_metric_fns_expect_fail]
+SHOW DATA METRIC FUNCTIONS IN ACCOUNT;
+
 -- [sql.asof_join]
 WITH a AS (SELECT 1 k, TO_TIMESTAMP_NTZ(0) t), b AS (SELECT 1 k, TO_TIMESTAMP_NTZ(0) t) SELECT COUNT(*) FROM a ASOF JOIN b MATCH_CONDITION(a.t >= b.t) ON a.k = b.k;
 

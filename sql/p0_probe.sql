@@ -40,40 +40,173 @@ FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 USE ROLE ACCOUNTADMIN;
 
 -- =============================================================================
--- SECTION 2 — object-surface probes. SHOW never errors on a missing feature,
--- it returns zero rows, so Run All is safe for this whole section.
--- Record ROW COUNT and whether the command itself was rejected.
+-- SECTION 2 — object-surface probes. One statement. Put the cursor in it and run
+-- it once. Returns a single text cell: name=OK or name=FAIL|reason.
+--
+-- On a fresh account nearly every SHOW returns zero rows, so the signal is whether
+-- the COMMAND is rejected, not how many rows come back.
 -- =============================================================================
-SHOW WAREHOUSES;
-SHOW RESOURCE MONITORS;
-SHOW INTEGRATIONS;
-SHOW EXTERNAL VOLUMES;
-SHOW DYNAMIC TABLES IN ACCOUNT;
-SHOW ICEBERG TABLES IN ACCOUNT;
-SHOW HYBRID TABLES IN ACCOUNT;
-SHOW STREAMLITS IN ACCOUNT;
-SHOW CORTEX SEARCH SERVICES IN ACCOUNT;
-SHOW SEMANTIC VIEWS IN ACCOUNT;
-SHOW AGENTS IN ACCOUNT;                    -- Snowflake CoWork agents
-SHOW GIT REPOSITORIES IN ACCOUNT;
-SHOW DBT PROJECTS IN ACCOUNT;
-SHOW APPLICATION PACKAGES;
-SHOW MANAGED ACCOUNTS;                     -- reader accounts
-SHOW SHARES;
-SHOW TAGS IN ACCOUNT;
-SHOW ALERTS IN ACCOUNT;
-SHOW NOTEBOOKS IN ACCOUNT;
-SHOW CLASSES IN SNOWFLAKE.ML;              -- FORECAST / ANOMALY_DETECTION / TOP_INSIGHTS
-SHOW FUNCTIONS LIKE 'AI\\_%' IN SCHEMA SNOWFLAKE.CORTEX;
-SHOW DATABASE ROLES IN DATABASE SNOWFLAKE; -- expect CORTEX_USER / AI_FUNCTIONS_USER
+EXECUTE IMMEDIATE $$
+DECLARE
+  r STRING DEFAULT '';
+BEGIN
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW WAREHOUSES';
+    r := r || 'show.warehouses=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.warehouses=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW RESOURCE MONITORS';
+    r := r || 'show.resource_monitors=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.resource_monitors=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW INTEGRATIONS';
+    r := r || 'show.integrations=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.integrations=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW EXTERNAL VOLUMES';
+    r := r || 'show.external_volumes=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.external_volumes=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW DYNAMIC TABLES IN ACCOUNT';
+    r := r || 'show.dynamic_tables=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.dynamic_tables=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW ICEBERG TABLES IN ACCOUNT';
+    r := r || 'show.iceberg_tables=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.iceberg_tables=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW HYBRID TABLES IN ACCOUNT';
+    r := r || 'show.hybrid_tables=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.hybrid_tables=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW STREAMLITS IN ACCOUNT';
+    r := r || 'show.streamlits=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.streamlits=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW CORTEX SEARCH SERVICES IN ACCOUNT';
+    r := r || 'show.cortex_search_services=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.cortex_search_services=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW SEMANTIC VIEWS IN ACCOUNT';
+    r := r || 'show.semantic_views=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.semantic_views=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW AGENTS IN ACCOUNT';
+    r := r || 'show.agents_cowork=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.agents_cowork=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW GIT REPOSITORIES IN ACCOUNT';
+    r := r || 'show.git_repositories=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.git_repositories=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW DBT PROJECTS IN ACCOUNT';
+    r := r || 'show.dbt_projects=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.dbt_projects=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW APPLICATION PACKAGES';
+    r := r || 'show.application_packages=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.application_packages=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW MANAGED ACCOUNTS';
+    r := r || 'show.managed_accounts_reader=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.managed_accounts_reader=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW SHARES';
+    r := r || 'show.shares=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.shares=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW TAGS IN ACCOUNT';
+    r := r || 'show.tags=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.tags=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW ALERTS IN ACCOUNT';
+    r := r || 'show.alerts=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.alerts=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW NOTEBOOKS IN ACCOUNT';
+    r := r || 'show.notebooks=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.notebooks=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW CLASSES IN SNOWFLAKE.ML';
+    r := r || 'show.ml_classes=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.ml_classes=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW FUNCTIONS LIKE ''AI\_%'' IN SCHEMA SNOWFLAKE.CORTEX';
+    r := r || 'show.cortex_ai_functions=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.cortex_ai_functions=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW DATABASE ROLES IN DATABASE SNOWFLAKE';
+    r := r || 'show.snowflake_db_roles=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.snowflake_db_roles=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW CLASSES IN SNOWFLAKE.CORE';
+    r := r || 'show.budgets_class=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.budgets_class=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  BEGIN
+    EXECUTE IMMEDIATE 'SHOW DATA METRIC FUNCTIONS IN ACCOUNT';
+    r := r || 'show.data_metric_fns_expect_fail=OK\n';
+  EXCEPTION WHEN OTHER THEN
+    r := r || 'show.data_metric_fns_expect_fail=FAIL|' || REPLACE(LEFT(SQLERRM, 140), '\n', ' ') || '\n';
+  END;
+  RETURN r;
+END;
+$$;
+
+-- Objects that already exist, for the Part 1 bootstrap to work around.
+-- Cannot fail.
+SELECT database_name, created, retention_time
+FROM   SNOWFLAKE.INFORMATION_SCHEMA.DATABASES
+ORDER  BY created;
 
 -- AISQL needs the USE AI FUNCTIONS account privilege (granted to PUBLIC by
 -- default) PLUS the CORTEX_USER or AI_FUNCTIONS_USER database role.
 SHOW GRANTS TO ROLE PUBLIC;
-SELECT "privilege", "granted_on", "name"
-FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()))
-WHERE  "privilege" ILIKE '%AI%' OR "name" ILIKE '%CORTEX%';
-SHOW GRANTS TO ROLE ACCOUNTADMIN;
 SELECT "privilege", "granted_on", "name"
 FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()))
 WHERE  "privilege" ILIKE '%AI%' OR "name" ILIKE '%CORTEX%';
