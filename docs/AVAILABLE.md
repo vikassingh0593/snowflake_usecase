@@ -11,7 +11,18 @@ Two independent columns, and they answer different questions:
 Verdict vocabulary: `OK` · `FAIL` · `N/A` (not probeable read-only) ·
 `ENTERPRISE` · `NOT AVAILABLE`.
 
-Probed on: `<pending>` · Account `AWTTGVH-OLB61128` · Standard trial · `AWS_US_WEST_2`
+Probed on: **2026-09-08 10:51 -0700** · org `AWTTGVH` · locator `OOB49311` ·
+`AWS_US_WEST_2` · Snowflake `10.31.103` · role `ORGADMIN`
+
+## Headline
+
+| # | Finding | Blast radius |
+|---|---|---|
+| 1 | **Cortex AI functions are blocked on this account.** Not a privilege problem — the grants are correct. The error is categorical: *"AI function X is not available for trial accounts."* | **Part 10 as designed is dead.** Part 11's Ask tab loses Cortex Analyst. Redesign in §E |
+| 2 | **Edition is not Standard, or the Standard gates are not where the brief assumes.** `ACCESS_HISTORY` was queryable and both "expect fail" gates passed | The whole substitution table in `CLAUDE.md` §2.2 may be unnecessary. `sql/p0_probe2.sql` settles it |
+| 3 | Every SQL, geo, H3, VECTOR and metadata capability the build needs: **OK** | Parts 7, 8, 12 unaffected |
+| 4 | **3.78 credits already consumed** before Part 1; account created 2026-08-27 (12 days old) | Budget rebased in `docs/CREDITS.md` |
+| 5 | Account **locator is `OOB49311`**, but the Snowsight URL says `olb61128` | Connection strings in Part 1 need the real account name — probe 2 returns both |
 
 ---
 
@@ -36,26 +47,24 @@ workable but it makes every part a round trip. See the note at the end of this f
 
 ---
 
-## A. Baseline — Section 1 of `sql/p0_probe.sql`
+## A. Baseline — Section 1 result
 
 | Check | Expected | Actual | Verdict |
 |---|---|---|---|
-| Organisation / account | `AWTTGVH` / `OLB61128` | | |
-| Region | `AWS_US_WEST_2` | | |
-| Snowflake version | ≥ 9.x post-Summit-2026 | | |
-| Edition | Standard | | |
-| Credits consumed to date | ~0 | | |
-| **Trial expiry date** | brief says 120-day balance | | |
-| `ORGADMIN` available | probably | | |
+| Organisation | `AWTTGVH` | `AWTTGVH` | OK |
+| Account | `OLB61128` (from the URL) | **`OOB49311`** (`CURRENT_ACCOUNT()` returns the *locator*, the URL carries the *name*) | reconcile in probe 2 |
+| Region | `AWS_US_WEST_2` | `AWS_US_WEST_2` | OK |
+| Snowflake version | ≥ 9.x | `10.31.103` | OK, post-Summit |
+| Current warehouse | — | `SNOWFLAKE_LEARNING_WH` | trial default, not one of ours |
+| Edition | Standard | **not returned** | **pending probe 2 — see §E** |
+| Credits consumed to date | ~0 | **3.782619** | rebase the budget |
+| Account created | — | **2026-08-27** (databases `SNOWFLAKE_LEARNING_DB`, `SNOWFLAKE_SAMPLE_DATA`, `USER$VIKASSINGH0593`) | 12 days old |
+| Trial expiry | brief says 120-day balance | **not returned** | pending probe 2 |
 
-**Conflict to resolve on the first probe run.** Snowflake's trial docs state a trial
-runs *30 days from sign-up or until the free balance is depleted, whichever comes
-first*. The brief assumes a 120-day balance. If the account is on the 30-day clock and
-was created more than ~28 days ago, the whole build has a hard deadline that has
-nothing to do with credits. Read the actual expiry off Snowsight → Admin → Accounts
-before Part 1. This is a schedule risk, not a cost risk.
-
----
+**Schedule risk downgraded.** If the 30-day trial clock is the binding one, sign-up on
+2026-08-27 puts expiry near **2026-09-26** — 18 days of runway for a 2-day build. Not
+urgent, but the balance-depletion clock now matters more than the calendar one, because
+3.78 credits are already gone.
 
 ## B. Post-Summit-2026 features (brief §16)
 
@@ -89,90 +98,113 @@ A `FAIL` here forces a design change in the named part. Probe all of them.
 
 | Capability | Needed by | Doc status | Account verdict |
 |---|---|---|---|
-| `ASOF JOIN` | Part 8 | GA | |
-| `MATCH_RECOGNIZE` | Part 8 | GA | |
-| `GEOGRAPHY` + `ST_DISTANCE` | Part 8 | GA | |
-| `ST_DWITHIN` | Part 8 | GA | |
-| `H3_LATLNG_TO_CELL` / `H3_GRID_DISK` / `H3_CELL_TO_BOUNDARY` | Parts 8, 11 | GA | |
-| `VECTOR` type + `VECTOR_COSINE_SIMILARITY` | Part 10 | GA | |
-| `QUALIFY` | Part 7 | GA | |
-| `GENERATOR` + `SEQ4` + `UNIFORM` | Part 2 | GA | |
-| Recursive CTE | Part 8 | GA | |
-| `TABLESAMPLE` | Part 10 | GA | |
+| `ASOF JOIN` | Part 8 | GA | **OK** |
+| `MATCH_RECOGNIZE` | Part 8 | GA | **OK** |
+| `GEOGRAPHY` + `ST_DISTANCE` | Part 8 | GA | **OK** |
+| `ST_DWITHIN` | Part 8 | GA | **OK** |
+| `H3_LATLNG_TO_CELL` / `H3_GRID_DISK` / `H3_CELL_TO_BOUNDARY` | Parts 8, 11 | GA | **OK** |
+| `VECTOR` type + `VECTOR_COSINE_SIMILARITY` | Part 10 | GA | **OK** |
+| `QUALIFY` | Part 7 | GA | **OK** |
+| `GENERATOR` + `SEQ4` + `UNIFORM` | Part 2 | GA | **OK** |
+| Recursive CTE | Part 8 | GA | **OK** |
+| `TABLESAMPLE` | Part 10 | GA | **OK** |
 
-### C2 — Cortex (`cortex.*` probes)
+### C2 — Cortex — **BLOCKED**
 
-AISQL needs **two** grants: the `USE AI FUNCTIONS` account privilege (granted to
-`PUBLIC` by default) **plus** the `CORTEX_USER` or `AI_FUNCTIONS_USER` database role.
-Section 2 of the probe checks both. AI Credits are priced flat **regardless of
-edition** — which is the strongest available evidence that Cortex is not
-Enterprise-gated, but it is not a statement about a Standard *trial*.
+Grants are correct and not the problem:
 
-| Capability | Needed by | Doc status | Account verdict |
+```
+USE AI FUNCTIONS   ACCOUNT         OOB49311
+USAGE              DATABASE_ROLE   SNOWFLAKE.CORTEX_USER
+```
+
+Both required grants are in place, and the call still fails. The error names the
+account type, not the privilege:
+
+> `AI function AI_CLASSIFY is not available for trial accounts.`
+
+| Capability | Needed by | Account verdict | Error |
 |---|---|---|---|
-| `AI_COMPLETE` | Part 10 | GA, region-gated | |
-| `AI_CLASSIFY` | Part 10 | GA | |
-| `AI_FILTER` | Part 10 | GA | |
-| `AI_AGG` | Parts 10, 11 | GA | |
-| `AI_SUMMARIZE_AGG` | Part 10 | GA | |
-| `AI_EXTRACT` | Part 10 | GA | |
-| `AI_SIMILARITY` | Part 10 | GA | |
-| `AI_EMBED` | Part 10 | GA | |
-| `SENTIMENT` | Part 10 | GA | |
-| `EMBED_TEXT_768` (legacy namespace) | Part 10 | GA | |
-| `COMPLETE` (legacy `SNOWFLAKE.CORTEX`) | Part 10 | GA | |
-| `AI_PARSE_DOCUMENT` | Part 10 | GA — needs a staged file, so existence only | |
-| **Cortex Analyst** | Parts 10, 11 | **No edition gate found in the docs.** A widely-repeated blog claim that it needs Enterprise is not supported by the doc pages checked, and conflicts with flat edition-independent AI Credit pricing. **Treat as UNVERIFIED until the probe** | |
-| **Cortex Search** | Part 10 | Edition requirement not stated in docs | |
-| **Trial AI cap** | Part 10 | **Confirmed in docs:** trial accounts without a valid payment method are limited to roughly **10 credits/day** of Cortex AI Functions | |
+| `AI_COMPLETE` | Part 10 | **FAIL** | `_COMPLETE_WITH_PROMPT_HISTORY_LLM ... not available for trial accounts` |
+| `AI_CLASSIFY` | Part 10 | **FAIL** | `AI_CLASSIFY ... not available for trial accounts` |
+| `AI_FILTER` | Part 10 | **FAIL** | `_AI_FILTER_WITH_PROMPT ...` |
+| `AI_EXTRACT` | Part 10 | **FAIL** | `_AI_EXTRACT ...` |
+| `AI_SIMILARITY` | Part 10 | **FAIL** | `_AI_EMBED_WITH_PROMPT_1024 ...` |
+| `AI_EMBED` | Part 10 | **FAIL** | `_AI_EMBED_WITH_PROMPT_768 ...` |
+| `SENTIMENT` | Part 10 | **FAIL** | `SENTIMENT ...` |
+| `EMBED_TEXT_768` | Part 10 | **FAIL** | `EMBED_TEXT_768 ...` |
+| `COMPLETE` (legacy namespace) | Part 10 | **FAIL** | `COMPLETE ...` |
+| `AI_AGG` | Parts 10, 11 | **OK — did not raise** | but "did not raise" ≠ "returned text". Probe 2 checks the actual value |
+| `AI_SUMMARIZE_AGG` | Part 10 | **OK — did not raise** | same caveat |
+| `AI_PARSE_DOCUMENT` | Part 10 | untested (needs a staged file) | expect FAIL by the same rule |
+| **Cortex Analyst** | Parts 10, 11 | **expect FAIL** | needs an LLM. The Enterprise-edition rumour was a red herring; the real gate is *trial*, not *edition* |
+| **Cortex Search** | Part 10 | **expect FAIL** | needs embeddings, which are blocked |
+| **Snowflake CoWork** | Part 10 | **expect FAIL** | same |
+| **Semantic View Autopilot** | Part 10 | **expect FAIL** | generates DDL with an LLM. GA and edition-independent, but that does not beat the trial gate |
+| Trial AI cap (~10 credits/day) | Part 10 | **moot** | the cap describes accounts that can call these at all |
+
+The ~10 credits/day figure from the docs describes trial accounts *with* AI access.
+This account has none, so the cap never binds. `docs/CREDITS.md` line for Part 10 drops
+from 20 credits to near zero.
 
 ### C3 — Platform objects (`SHOW` probes, Section 2)
 
 | Capability | Needed by | Doc status | Account verdict |
 |---|---|---|---|
-| Dynamic tables | Part 8 | GA | |
-| Iceberg tables + external volumes | Part 5 | GA | |
-| Streamlit in Snowflake | Part 11 | GA | |
-| Cortex Search services | Part 10 | GA | |
-| Semantic views | Part 10 | GA | |
-| Agents (CoWork) | Part 10 | see §B | |
-| Git repositories + Workspaces | Part 15 | GA | |
-| `EXECUTE DBT PROJECT` / dbt projects | Part 15 | GA | |
-| Application packages (Native App) | Part 13 | GA | |
-| Managed accounts (reader) | Part 13 | GA, limit 20 per provider. **Trial support not stated in docs** — if `SHOW MANAGED ACCOUNTS` is rejected, sharing is not enabled and needs Snowflake Support | |
-| Shares | Part 13 | GA | |
-| **Object tags** | Part 12 | **Available on all editions since May 2025** for create/set. Enterprise only for tag *propagation*, tag-based masking policies, and the Snowsight Tags & policies UI. **The brief's Standard-Edition tag doubt is resolved: tagging works** | |
-| Alerts | Part 12 | GA | |
-| Resource monitors | Part 1 | GA | |
-| Notebooks | Part 9 (Modin) | GA | |
-| `SNOWFLAKE.ML` classes (FORECAST / ANOMALY_DETECTION / TOP_INSIGHTS) | Part 10 | GA (Top Insights GA 2024-11-04). **No edition gate found**; the Enterprise gate applies to *Data Quality Monitoring* anomaly detection, a different feature | |
-| **Hybrid tables** | Part 14 | GA in all commercial AWS regions since 2024-11-13. Separate request billing removed 2026-03-01. Edition requirement not stated | |
-| **Snowflake Postgres** | Part 14 | **GA 2026-02-24**, AWS + Azure. **AWS US West (Oregon) = `us-west-2` is on the launch list** — co-located with this account | |
-| **Kafka Connector v4** | Part 3 | **GA 2026-04-20.** Ground-up rewrite on Snowpipe Streaming High-Performance Architecture; up to 10 GB/s per table, 5–10 s end-to-end, exactly-once and ordered. Bundles Snowpipe Streaming SDK 1.6.0; migrates offset tokens from Classic channels on startup. **Snowpipe Streaming Classic has a published deprecation notice** — which is exactly why mechanism 3 (file mode) vs mechanism 1 (v4) is worth measuring | |
+| Dynamic tables | Part 8 | GA | OK |
+| Iceberg tables + external volumes | Part 5 | GA | OK |
+| Streamlit in Snowflake | Part 11 | GA | OK |
+| Cortex Search services | Part 10 | GA | SHOW OK, service unusable (C2) |
+| Semantic views | Part 10 | GA | SHOW OK, Autopilot expect FAIL (C2) |
+| Agents (CoWork) | Part 10 | see §B | SHOW OK, agent unusable (C2) |
+| Git repositories + Workspaces | Part 15 | GA | OK |
+| `EXECUTE DBT PROJECT` / dbt projects | Part 15 | GA | OK |
+| Application packages (Native App) | Part 13 | GA | OK |
+| Managed accounts (reader) | Part 13 | GA, limit 20 per provider. **Trial support not stated in docs** — if `SHOW MANAGED ACCOUNTS` is rejected, sharing is not enabled and needs Snowflake Support | **OK — reader accounts are creatable** |
+| Shares | Part 13 | GA | OK |
+| **Object tags** | Part 12 | **Available on all editions since May 2025** for create/set. Enterprise only for tag *propagation*, tag-based masking policies, and the Snowsight Tags & policies UI. **The brief's Standard-Edition tag doubt is resolved: tagging works** | OK |
+| Alerts | Part 12 | GA | OK |
+| Resource monitors | Part 1 | GA | OK |
+| Notebooks | Part 9 (Modin) | GA | OK |
+| `SNOWFLAKE.ML` classes (FORECAST / ANOMALY_DETECTION / TOP_INSIGHTS) | Part 10 | GA (Top Insights GA 2024-11-04). **No edition gate found**; the Enterprise gate applies to *Data Quality Monitoring* anomaly detection, a different feature | **OK — classes present. Not LLM functions, so the trial AI gate should not apply. Confirm by actually training one in Part 10** |
+| **Hybrid tables** | Part 14 | GA in all commercial AWS regions since 2024-11-13. Separate request billing removed 2026-03-01. Edition requirement not stated | **OK** |
+| **Snowflake Postgres** | Part 14 | **GA 2026-02-24**, AWS + Azure. **AWS US West (Oregon) = `us-west-2` is on the launch list** — co-located with this account | not probeable via SHOW — Snowsight nav |
+| **Kafka Connector v4** | Part 3 | **GA 2026-04-20.** Ground-up rewrite on Snowpipe Streaming High-Performance Architecture; up to 10 GB/s per table, 5–10 s end-to-end, exactly-once and ordered. Bundles Snowpipe Streaming SDK 1.6.0; migrates offset tokens from Classic channels on startup. **Snowpipe Streaming Classic has a published deprecation notice** — which is exactly why mechanism 3 (file mode) vs mechanism 1 (v4) is worth measuring | client-side, nothing to probe |
 
-### C4 — Metadata layers (`meta.*` probes)
+### C4 — Metadata layers (`meta.*` probes) — all OK
 
-| View | Needed by | Expectation | Account verdict |
-|---|---|---|---|
-| `ACCOUNT_USAGE.OBJECT_DEPENDENCIES` | Part 12 | available | |
-| `ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY` | Part 12, 16 | available | |
-| `ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY` | every part | available | |
-| `ACCOUNT_USAGE.METERING_HISTORY` | every part | available | |
-| `ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` | Part 12 | available on trial | |
-| `INFORMATION_SCHEMA` | Part 12 | available | |
-| `ACCOUNT_USAGE.ACCESS_HISTORY` | — | **expected FAIL** (Enterprise) — the probe confirms the substitution is necessary, not optional | |
-
-### C5 — Enterprise gates, probed to prove the negative
-
-`FAIL` is the expected and desired result. These two rows are evidence for the
-substitution table in `CLAUDE.md` §2.2.
-
-| Probe | Expectation | Account verdict |
+| View | Needed by | Account verdict |
 |---|---|---|
-| `MATERIALIZED_VIEW_REFRESH_HISTORY` | FAIL → dynamic tables instead | |
-| `SHOW DATA METRIC FUNCTIONS` | FAIL → dbt tests + Snowpark DQ instead | |
+| `ACCOUNT_USAGE.OBJECT_DEPENDENCIES` | Part 12 | OK |
+| `ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY` | Parts 12, 16 | OK |
+| `ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY` | every part | OK |
+| `ACCOUNT_USAGE.METERING_HISTORY` | every part | OK |
+| `ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` | Part 12 | OK |
+| `INFORMATION_SCHEMA` | Part 12 | OK |
+| `ACCOUNT_USAGE.ACCESS_HISTORY` | — | **OK — and it was expected to FAIL.** See C5 |
 
----
+### C5 — the Enterprise gates did not gate. My probes were too weak.
+
+Both "expect fail" probes returned OK, and so did `ACCESS_HISTORY`. Stated plainly:
+**these three probes did not discriminate**, and the reason matters.
+
+| Probe | Why the result is inconclusive |
+|---|---|
+| `gate.materialized_view_expect_fail` | queried `ACCOUNT_USAGE.MATERIALIZED_VIEW_REFRESH_HISTORY`. That view exists on every edition and simply returns zero rows when the feature is unused. Wrong test |
+| `gate.data_metric_functions_expect_fail` | `SHOW DATA METRIC FUNCTIONS` returns an empty set rather than erroring. Wrong test |
+| `meta.access_history_absent_expected` | `SELECT COUNT(*)` on an empty view. **This one is real evidence** — on Standard the read should be rejected outright — but a single COUNT is thin ground for rewriting the architecture |
+
+Two readings, and they lead to very different builds:
+
+1. **The account is not Standard.** Snowflake trials commonly provision Enterprise. Then
+   masking policies, row access policies, materialized views, search optimization, DMFs
+   and 90-day Time Travel are all real, and `CLAUDE.md` §2.2's substitution table is
+   solving a problem that does not exist.
+2. **The account is Standard** and all three probes were simply badly chosen.
+
+`sql/p0_probe2.sql` settles it with `SHOW ORGANIZATION ACCOUNTS` (the `edition` column,
+definitive) plus `SHOW MASKING POLICIES` / `SHOW ROW ACCESS POLICIES`, which do reject
+on Standard rather than returning empty.
 
 ## D. Confirmed absent — Standard Edition (do not re-probe)
 
@@ -186,20 +218,49 @@ synthetic data generation · Cortex AI Guardrails.
 
 ## E. Decisions this probe forces
 
-Three are already decided on doc evidence and do not need the account.
+### E1 — settled on doc evidence, no account needed
 
-| Decision | Depends on | Choice | Rationale |
+| Decision | Choice | Rationale |
+|---|---|---|
+| Semantic view: Autopilot vs hand-written | **moot** — Autopilot needs an LLM, blocked | see E3 |
+| Iceberg `FORMAT_VERSION` | **v3** | GA 2026-05-07. Create at v3; the v2→v3 upgrade is irreversible |
+| Part 12 PII: tags vs secure views | **both** | tags classify, secure views enforce. Available regardless of edition |
+
+### E2 — settled by probe 1
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Part 13 reader account | **build it** | `SHOW MANAGED ACCOUNTS` accepted. Sharing is enabled |
+| Part 14 hybrid table burst | **build it** | `SHOW HYBRID TABLES` accepted |
+| Parts 7, 8 SQL surface | **unchanged** | `ASOF JOIN`, `MATCH_RECOGNIZE`, `GEOGRAPHY`, H3, `VECTOR`, `QUALIFY`, `GENERATOR` all OK |
+| Part 12 metadata comparison | **unchanged** | all four metadata layers readable |
+
+### E3 — Part 10 must be redesigned. Cortex is gone.
+
+Every LLM-backed surface fails on the same rule. What survives, and what replaces what:
+
+| Was | Status | Replacement | Honest cost of the swap |
 |---|---|---|---|
-| Semantic view: Autopilot vs hand-written | B: Autopilot | **Autopilot** ✅ decided | GA since 2026-02-03, all accounts. Hand-writing the view costs an hour for no demo value |
-| Iceberg `FORMAT_VERSION` | B: Iceberg v3 | **v3** ✅ decided | GA since 2026-05-07. Deletion vectors and row lineage are the whole reason to show Iceberg over a Snowflake table. Upgrade is irreversible, so create at v3 rather than v2-then-upgrade |
-| Part 12 PII: tags vs secure views only | C3: object tags | **Both** ✅ decided | Tagging is available on all editions since May 2025. Tag-based masking is not — so tags classify, secure views enforce. That split is the finding |
-| Ask tab: Analyst only, or Analyst + CoWork | B: CoWork, C2: Analyst | pending probe | |
-| Feature Store: batch vs streaming feature views | B: Streaming Feature Views | pending probe | |
-| Part 13: reader account vs listing-only | C3: managed accounts | pending probe | |
-| Part 14: which burst(s) run | C3: hybrid tables, Snowflake Postgres | pending probe | Postgres is regionally co-located, so it is the stronger of the two |
-| Cortex budget shape | C2: 10 credits/day cap | pending probe | If the cap is real, Part 10 needs **two calendar days**, which no amount of speed fixes |
+| `AI_CLASSIFY` → complaint reason code | dead | sklearn classifier trained in a Snowpark sproc on the seeded complaint labels, versioned in **Model Registry** | more code, but it reuses Part 9's infrastructure and the model is *ours* — arguably a better artefact than a one-line function call |
+| `SENTIMENT` | dead | lexicon UDF, or a second head on the same classifier | loses nuance; keeps the column |
+| `AI_EXTRACT` → order id from free text | dead | regex UDF | **regex was always the right tool here.** AI_EXTRACT was overkill for a numeric id |
+| `AI_PARSE_DOCUMENT` → complaint PDFs | expect dead | `pypdf` in a Snowpark UDF reading the directory table | mechanism 10 survives intact; text extraction only, no layout understanding |
+| `EMBED_TEXT_768` / `AI_EMBED` → `VECTOR` search | dead | feature-hashing / TF-IDF vectoriser in a Snowpark UDF → `VECTOR(FLOAT, 256)`, then `VECTOR_COSINE_SIMILARITY` as designed | **lexical, not semantic.** Say so in the write-up. Upgrade path: stage `all-MiniLM-L6-v2` (~90 MB) and run it in the UDF — real embeddings, ~20 min of setup, needs a local download |
+| **Cortex Search** vs hand-rolled vector search | dead | the hand-rolled side survives alone | the planned honest comparison becomes a documented gap, which is still a finding |
+| **Cortex Analyst** / **CoWork** → Ask tab | dead | constrained query builder over the semantic view: pick metric + dimension + filter, show the generated SQL | loses NL. Keeps the semantic layer's point — that a governed metric definition is what makes any of this safe |
+| `SNOWFLAKE.ML.FORECAST` / `ANOMALY_DETECTION` / `TOP_INSIGHTS` | **expected to survive** | unchanged | classical ML, not LLM inference. Classes are present. Confirm by training one |
 
----
+**Net effect on the brief's goals:** the "two ML approaches compared" theme survives
+(SQL ML functions vs Snowpark sklearn). The "AI over text" theme is reduced to
+classical NLP. Part 10 shrinks from ~20 credits to ~4.
+
+### E4 — open, needs a decision from the operator
+
+| Question | Why it matters |
+|---|---|
+| **Convert the trial to paid?** Adding a card converts the account and unlocks Cortex. It also starts real billing once the free balance is gone. This is the only path to the AISQL suite | restores Part 10 as designed. **Money — your call, not mine** |
+| **Edition** (probe 2) | if Enterprise, `CLAUDE.md` §2.2 is rewritten and Parts 8 and 12 gain masking policies, row access policies, materialized views and search optimization as *first-class* rather than substituted |
+| Network policy widened for this session? | decides whether Parts 1–17 are scripts you paste or statements I run |
 
 ## F. Screenshots to capture
 

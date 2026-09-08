@@ -9,7 +9,7 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 
 | Part | Status | Contents | Exit criteria |
 |---|---|---|---|
-| **0** | 🟡 | **Feature probe.** Availability checks, Snowsight nav screenshots, write `docs/AVAILABLE.md`. **Before anything else** — it decides Parts 10, 12, 13 | `docs/AVAILABLE.md` committed with every verdict filled |
+| **0** | ✅ | **Feature probe.** Availability checks, Snowsight nav screenshots, write `docs/AVAILABLE.md`. **Before anything else** — it decides Parts 10, 12, 13 | `docs/AVAILABLE.md` committed with every verdict filled |
 | **1** | ⬜ | Azure resources (RG, GPv2 SA, 4 containers, queue, Event Grid), Snowflake bootstrap (db, schemas, warehouses), RBAC, budget + resource monitor, query-tag convention, 3 integrations consented | `SELECT SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')` green |
 | **2** | ⬜ | Docker: Postgres 16, Redpanda, Kafka Connect + Debezium + Snowflake sink **v4**. Python data generator + the in-Snowflake `GENERATOR` variant | producers running, topics populated |
 | **3** | ⬜ | Ingestion A — streaming: mechanisms 1, 2, 3 | rows in `RAW`; latency/credit comparison recorded in `OPS` |
@@ -19,8 +19,8 @@ Legend: ⬜ not started · 🟡 in progress · ✅ done · ⛔ blocked
 | **7** | ⬜ | dbt `RAW` → `CORE`: `QUALIFY` dedupe, SCD2 snapshots, `MERGE` upserts, tests, source freshness | `dbt build` green |
 | **8** | ⬜ | dbt `CORE` → `MART`: star schema, `ASOF JOIN`, `MATCH_RECOGNIZE`, `GEOGRAPHY` + H3, clustering, 2 dynamic tables | all facts and dims populated and tested |
 | **9** | ⬜ | Snowpark: UDF, UDTF, vectorized UDF, ML preprocessing, training sproc, Model Registry, Feature Store, `LAB` → `SERVE` promotion | `SERVE.ORDER_RISK` populated and tested |
-| **10** | ⬜ | Cortex: AISQL suite, `AI_PARSE_DOCUMENT`, `VECTOR` search, Cortex Search, FORECAST, ANOMALY_DETECTION, TOP_INSIGHTS, semantic view (Autopilot if available), Cortex Analyst, CoWork if available | Ask tab answers a real question |
-| **11** | ⬜ | Streamlit: 4 tabs, H3 map, write-back loop, and the dbt model that turns actions into a feature | app usable end to end |
+| **10** | ⬜ | **Redesigned — Cortex is blocked on this account.** `SNOWFLAKE.ML` FORECAST / ANOMALY_DETECTION / TOP_INSIGHTS, sklearn complaint classifier via Snowpark + Model Registry, `pypdf` document parsing, hashing-vectoriser `VECTOR` search, hand-written semantic view | ML functions trained and scoring; `VECTOR` search returns ranked complaints; semantic view queryable |
+| **11** | ⬜ | Streamlit: 4 tabs, H3 map, write-back loop, and the dbt model that turns actions into a feature. **Ask tab is a constrained query builder over the semantic view, not NL** | app usable end to end |
 | **12** | ⬜ | Governance: secure views, tags, query attribution, alerts + email, `OBJECT_DEPENDENCIES`, metadata-layer comparison | alert fires on a seeded DQ failure |
 | **13** | ⬜ | Serving: reader account, private listing, Native App, SQL API | external consumer queries `MART` |
 | **14** | ⬜ | Bursts: Snowflake Postgres, hybrid table for `ACTION_LOG`. Tear both down **immediately** | screenshots taken, objects dropped |

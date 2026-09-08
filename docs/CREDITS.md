@@ -43,7 +43,7 @@ re-read at the end of the build for the Part 16 report.
 | 7 — dbt RAW→CORE | 10 | | | | | outer session **and** dbt target both billed |
 | 8 — dbt CORE→MART | 14 | | | | | includes 2 dynamic table refreshes |
 | 9 — Snowpark ML | 18 | | | | | training sproc is the single largest warehouse item |
-| 10 — Cortex | 20 | | | | | trial AISQL cap ~10 credits/day (UNVERIFIED) — sample first |
+| 10 — ML functions + Snowpark NLP | **4** (was 20) | | | | | **Cortex AISQL blocked on this account.** Redesigned in `docs/AVAILABLE.md` §E3: SNOWFLAKE.ML functions + sklearn classifier + hashing-vectoriser VECTOR search |
 | 11 — Streamlit | 6 | | | | | `WH_APP_XS`, interactive |
 | 12 — governance | 3 | | | | | |
 | 13 — serving | 5 | | | | | reader account bills to this account |
@@ -51,13 +51,14 @@ re-read at the end of the build for the Part 16 report.
 | 15 — CI/CD | 4 | | | | | clone is zero-copy; `dbt build` on it is not |
 | 16 — write-ups | 1 | | | | | |
 | 17 — teardown | 1 | | | | | |
-| **Total** | **128** | | | | | headroom to 140 = 12 credits |
+| **Total** | **112** (was 128) | | | | | 3.78 pre-spent; headroom to 140 now 24 credits |
 
 ## Running total
 
 | Checkpoint | Credits consumed | Balance remaining | Date |
 |---|---|---|---|
-| Start | 0 | ~200 | |
+| Start (brief's assumption) | 0 | ~200 | |
+| **Probe 1, actual** | **3.78 already consumed before Part 0** | **~196** | 2026-09-08 |
 
 ## Overruns and their cause
 
