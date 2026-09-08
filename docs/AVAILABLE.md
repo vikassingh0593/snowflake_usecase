@@ -19,7 +19,7 @@ Probed on: **2026-09-08 10:51 -0700** · org `AWTTGVH` · locator `OOB49311` ·
 | # | Finding | Blast radius |
 |---|---|---|
 | 1 | **Cortex AI functions are blocked on this account.** Not a privilege problem — the grants are correct. The error is categorical: *"AI function X is not available for trial accounts."* | **Part 10 as designed is dead.** Part 11's Ask tab loses Cortex Analyst. Redesign in §E |
-| 2 | **Edition is not Standard, or the Standard gates are not where the brief assumes.** `ACCESS_HISTORY` was queryable and both "expect fail" gates passed | The whole substitution table in `CLAUDE.md` §2.2 may be unnecessary. `sql/p0_probe2.sql` settles it |
+| 2 | **This account is Enterprise-shaped, not Standard.** `SHOW MASKING POLICIES`, `SHOW ROW ACCESS POLICIES`, `SHOW AGGREGATION POLICIES` and `SHOW MATERIALIZED VIEWS` all resolve; `ACCESS_HISTORY` is readable. Awaiting one `CREATE` to confirm (`sql/p0_probe4_ddl.sql`) | **`CLAUDE.md` §2.2 is solving a problem this account does not have.** Parts 8 and 12 gain the real features; the substitutes become a deliberate comparison. See §E5 |
 | 3 | Every SQL, geo, H3, VECTOR and metadata capability the build needs: **OK** | Parts 7, 8, 12 unaffected |
 | 4 | **3.78 credits already consumed** before Part 1; account created 2026-08-27 (12 days old) | Budget rebased in `docs/CREDITS.md` |
 | 5 | Account **locator is `OOB49311`**, but the Snowsight URL says `olb61128` | Connection strings in Part 1 need the real account name — probe 2 returns both |
@@ -261,6 +261,39 @@ classical NLP. Part 10 shrinks from ~20 credits to ~4.
 | **Convert the trial to paid?** Adding a card converts the account and unlocks Cortex. It also starts real billing once the free balance is gone. This is the only path to the AISQL suite | restores Part 10 as designed. **Money — your call, not mine** |
 | **Edition** (probe 2) | if Enterprise, `CLAUDE.md` §2.2 is rewritten and Parts 8 and 12 gain masking policies, row access policies, materialized views and search optimization as *first-class* rather than substituted |
 | Network policy widened for this session? | decides whether Parts 1–17 are scripts you paste or statements I run |
+
+### E5 — Enterprise surface, if the DDL probe confirms
+
+`SHOW` resolved for all four policy/MV surfaces and `ACCESS_HISTORY` reads. That is
+strong, not conclusive — a `SHOW` returning an empty set fooled me once already in C5,
+so `sql/p0_probe4_ddl.sql` runs the `CREATE` that cannot be misread.
+
+If it confirms, the plan changes as follows. **Build both sides where the real feature
+is free, one side where it is not.**
+
+| Feature | Compute cost | Plan |
+|---|---|---|
+| **Masking policies** | metadata + query-time only, ~0 | **Build for real**, and keep the `SHA2()` secure view beside it. Part 12 compares column-level policy vs view-level hashing on the same column |
+| **Row access policies** | ~0 | **Build for real**, keep the `CURRENT_ROLE()` secure view beside it. The policy attaches to the table, the view protects one access path — that difference is the finding |
+| **Tag-based masking** | ~0 | **Add.** Tag a column `PII`, attach the policy to the tag, watch it apply everywhere. This is what object tags were missing |
+| **`SYSTEM$CLASSIFY`** | small serverless | **Add — it restores what Cortex's absence killed.** Automatic sensitive-data classification replaces the Cortex-assisted PII proc |
+| **`ACCESS_HISTORY`** | ~0 | **Use it.** Column-level lineage. Keep the `QUERY_HISTORY` + `OBJECT_DEPENDENCIES` version as the comparison |
+| **Data metric functions** | serverless, scheduled | **One DMF**, `TRIGGER_ON_CHANGES` or a long cron, beside the dbt test and the Snowpark check. Three ways to express one data-quality rule, credits compared |
+| **Materialized views** | **background maintenance, continuous** | **One MV on one small table**, measured against the dynamic table doing the same job, then **dropped**. Burst discipline, same as Part 14 |
+| **Search optimization** | **build + maintenance, the priciest of these** | **One table.** `SYSTEM$ESTIMATE_SEARCH_OPTIMIZATION_COSTS` **first**, then build, measure against the clustering key, then **drop** |
+| **Time Travel > 1 day** | storage only, trivial at this scale | Set `MART` to 7 days. Leave everything else at 1 |
+| **Multi-cluster warehouses** | real | **Skip.** No workload here justifies it and it is a cost trap on a fixed balance |
+| **Query acceleration** | real | **Skip.** XS warehouse over 200k rows will not show a difference worth the credits |
+| **Clean rooms, differential privacy** | — | **Skip**, as the brief already directs |
+
+**Net position after both findings.** Cortex is gone and Enterprise arrived. Part 10
+loses its AI surface; Part 12 roughly doubles in substance and gets a real PII
+classification story back. Breadth is preserved, it just moved from AI to governance.
+
+**Cost warning that now applies.** `CLAUDE.md` §2.3 says nothing runs 24/7. Materialized
+views and search optimization both maintain themselves in the background — they are
+exactly the kind of always-on serverless the rule exists to prevent. They are built,
+measured and dropped inside one part, never left standing.
 
 ## F. Screenshots to capture
 

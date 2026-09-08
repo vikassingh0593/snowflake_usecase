@@ -46,7 +46,21 @@ Rules:
 Standard Edition **trial**, region **AWS_US_WEST_2**, ~200 credits, 120-day balance.
 Target consumption for the whole build: **90–140 credits**.
 
-### 2.2 Enterprise features do not exist here. Never propose them.
+### 2.2 Enterprise features — **the brief's assumption is wrong for this account**
+
+Probe 0 found `SHOW MASKING POLICIES`, `SHOW ROW ACCESS POLICIES`,
+`SHOW AGGREGATION POLICIES`, `SHOW MATERIALIZED VIEWS` all resolving and
+`ACCOUNT_USAGE.ACCESS_HISTORY` readable. Pending confirmation by
+`sql/p0_probe4_ddl.sql`, treat this account as **Enterprise**, and read the list below
+as *the Standard-Edition story we demonstrate on purpose*, not as a hard limit. Plan in
+`docs/AVAILABLE.md` §E5.
+
+Two of these carry continuous background compute and are therefore burst-only, built
+and dropped inside one part: **materialized views** and **search optimization**.
+**Multi-cluster warehouses and query acceleration stay banned** on cost grounds
+regardless of edition.
+
+Originally-assumed-absent list, kept for the comparison narrative:
 masking policies · row access policies · aggregation policies · projection policies ·
 data metric functions · materialized views · search optimization · query acceleration ·
 automatic classification · `ACCESS_HISTORY` · object-bound event tables · Time Travel
