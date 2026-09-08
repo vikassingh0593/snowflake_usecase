@@ -1,0 +1,36 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+rsa_key*
+*.p8
+*.pem
+*.pfx
+snowflake_credentials.json
+.snowflake/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# dbt — target and logs only. dbt_packages/ IS committed on purpose:
+# running `dbt deps` inside Snowflake Workspaces needs an external access
+# integration (UNVERIFIED; avoided).
+target/
+logs/
+dbt_modules/
+
+# Local data / scratch
+*.log
+data/generated/
+*.parquet
+*.ndjson.gz
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
