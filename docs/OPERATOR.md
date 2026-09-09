@@ -190,6 +190,7 @@ still useful; a summary of them is not.
 | 3 | Section 2 — generate the key pair, keep the public key ready | Part 1 |
 | 4 | Section 3 — find the working account identifier | Part 1 |
 | 5 | Section 4 — the two read-only `az` commands | Part 1 storage decision |
-| 6 | Say **"Part 1"** | Claude writes `sql/p1_bootstrap.sql` and `scripts/p1_azure.sh` for review |
+| 6 | Read `docs/BUILD_GUIDE.md` — the stage-by-stage manual for the whole project | Parts 1-17 |
+| 7 | Say **"Part 1"** when you want the reviewed scripts for that part |  |
 
 Steps 2–5 are independent of step 1 — run them in parallel while the probe is open.
