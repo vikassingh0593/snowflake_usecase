@@ -167,8 +167,8 @@ did.
 |---|---|---|
 | Capability assessment | ✅ Done | Confirmed what the platform can and cannot do (see §9) |
 | **Source systems** | ✅ **Done** | The operational database, its live change feed, and the app event stream are running and producing data |
-| Platform foundation | 🔜 Next | Creating the analytics environment, access roles, and spending controls |
-| Data arrival | ⬜ | Connecting all fourteen routes data takes into the platform |
+| Platform foundation | ✅ **Done** | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
+| Data arrival | 🔜 Next | Connecting all fourteen routes data takes into the platform |
 | Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
 | Risk prediction | ⬜ | Training and deploying the late-delivery model |
 | Forecasting and text analysis | ⬜ | Demand forecast, anomaly detection, complaint analysis |
