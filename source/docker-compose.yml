@@ -75,8 +75,7 @@ services:
       # Snowflake sink jar is dropped into ./connectors/plugins at Part 3.
       # Uncomment the proxy lines if your host needs one to reach Snowflake.
       # JAVA_OPTS: "-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"
-      ENABLE_DEBEZIUM_SCRIPTING: "true"
     volumes:
-      - ./connectors/plugins:/kafka/connect/extra:ro
+      - ./connectors/plugins:/kafka/connect/extra
     ports:
       - "8083:8083"

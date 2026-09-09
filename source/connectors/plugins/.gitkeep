@@ -1,0 +1,3 @@
+# Kafka Connect scans every directory under /kafka/connect for plugins.
+# The Snowflake Kafka connector v4 jar goes here at Part 3. Must stay writable:
+# the Debezium entrypoint writes into each plugin directory on startup.
