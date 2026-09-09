@@ -1,7 +1,7 @@
 -- =============================================================================
 -- sql/p2_integrations.sql — the three Azure integrations. THIS WRITES.
 --
--- BEFORE RUNNING: replace <SA> with the storage account name and <TENANT_ID>
+-- BEFORE RUNNING: replace snowflakeqcpoc25056 with the storage account name and 985bb39b-768f-4cc6-ba0f-0f544b826143
 -- with the tenant GUID that scripts/p2_azure.sh printed.
 --
 -- Run section by section. Each integration needs a consent + RBAC round trip
@@ -24,8 +24,8 @@ CREATE OR REPLACE EXTERNAL VOLUME EXVOL_QC
     (
       NAME = 'qc-archive'
       STORAGE_PROVIDER = 'AZURE'
-      STORAGE_BASE_URL = 'azure://<SA>.blob.core.windows.net/archive/'
-      AZURE_TENANT_ID = '<TENANT_ID>'
+      STORAGE_BASE_URL = 'azure://snowflakeqcpoc25056.blob.core.windows.net/archive/'
+      AZURE_TENANT_ID = '985bb39b-768f-4cc6-ba0f-0f544b826143'
     )
   )
   ALLOW_WRITES = TRUE;
@@ -34,12 +34,12 @@ CREATE OR REPLACE EXTERNAL VOLUME EXVOL_QC
 CREATE OR REPLACE STORAGE INTEGRATION SI_QC_AZURE
   TYPE = EXTERNAL_STAGE
   STORAGE_PROVIDER = 'AZURE'
-  AZURE_TENANT_ID = '<TENANT_ID>'
+  AZURE_TENANT_ID = '985bb39b-768f-4cc6-ba0f-0f544b826143'
   ENABLED = TRUE
   STORAGE_ALLOWED_LOCATIONS = (
-    'azure://<SA>.blob.core.windows.net/landing/',
-    'azure://<SA>.blob.core.windows.net/external/',
-    'azure://<SA>.blob.core.windows.net/docs/'
+    'azure://snowflakeqcpoc25056.blob.core.windows.net/landing/',
+    'azure://snowflakeqcpoc25056.blob.core.windows.net/external/',
+    'azure://snowflakeqcpoc25056.blob.core.windows.net/docs/'
   );
 
 -- 1c. Notification integration: Event Grid drops BlobCreated messages on the
@@ -48,8 +48,8 @@ CREATE OR REPLACE NOTIFICATION INTEGRATION NI_QC_SNOWPIPE
   ENABLED = TRUE
   TYPE = QUEUE
   NOTIFICATION_PROVIDER = AZURE_STORAGE_QUEUE
-  AZURE_STORAGE_QUEUE_PRIMARY_URI = 'https://<SA>.queue.core.windows.net/snowpipe-queue'
-  AZURE_TENANT_ID = '<TENANT_ID>';
+  AZURE_STORAGE_QUEUE_PRIMARY_URI = 'https://snowflakeqcpoc25056.queue.core.windows.net/snowpipe-queue'
+  AZURE_TENANT_ID = '985bb39b-768f-4cc6-ba0f-0f544b826143';
 
 -- =============================================================================
 -- STEP 2 — consent and RBAC. Repeat for EACH of the three objects.
@@ -108,20 +108,20 @@ CREATE OR REPLACE FILE FORMAT FF_PARQUET
 -- External stages, one per container.
 CREATE OR REPLACE STAGE STG_LANDING
   STORAGE_INTEGRATION = SI_QC_AZURE
-  URL = 'azure://<SA>.blob.core.windows.net/landing/'
+  URL = 'azure://snowflakeqcpoc25056.blob.core.windows.net/landing/'
   FILE_FORMAT = FF_JSON_GZ
   COMMENT = 'Snowpipe auto-ingest source';
 
 CREATE OR REPLACE STAGE STG_EXTERNAL
   STORAGE_INTEGRATION = SI_QC_AZURE
-  URL = 'azure://<SA>.blob.core.windows.net/external/'
+  URL = 'azure://snowflakeqcpoc25056.blob.core.windows.net/external/'
   FILE_FORMAT = FF_CSV
   COMMENT = 'external table over 3PL settlement';
 
 -- Directory table on the docs container, for complaint PDFs.
 CREATE OR REPLACE STAGE STG_DOCS
   STORAGE_INTEGRATION = SI_QC_AZURE
-  URL = 'azure://<SA>.blob.core.windows.net/docs/'
+  URL = 'azure://snowflakeqcpoc25056.blob.core.windows.net/docs/'
   DIRECTORY = (ENABLE = TRUE)
   COMMENT = 'directory table, unstructured';
 
