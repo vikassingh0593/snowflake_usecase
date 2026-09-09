@@ -239,8 +239,9 @@ def gen_orders(stores, customers, riders):
             picked = packed + timedelta(minutes=random.uniform(0.5, 4.0))
             base = (promised - placed).total_seconds() / 60.0
             late = random.random() < p_breach
-            total = base * (random.uniform(1.06, 1.85) if late else random.uniform(0.55, 0.94))
-            delivered = placed + timedelta(minutes=total)
+            ride_minutes = base * (random.uniform(1.06, 1.85) if late
+                                   else random.uniform(0.55, 0.94))
+            delivered = placed + timedelta(minutes=ride_minutes)
             if delivered <= picked:      # keep the milestone order intact
                 delivered = picked + timedelta(minutes=random.uniform(1.0, 3.0))
 
@@ -303,6 +304,83 @@ def build_events(oid, store_id, rider_id, placed, packed, picked, delivered, can
     return out
 
 
+# --------------------------------------------------------------------------
+# Self-validation. The generator checks its own output against the DDL before
+# claiming success, because psql \copy loads POSITIONALLY -- a header check
+# alone passes happily while a float sits in a money column.
+# --------------------------------------------------------------------------
+SCHEMA_SQL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "postgres", "init", "01_schema.sql")
+
+
+def ddl_columns() -> dict[str, list[tuple[str, str]]]:
+    """(column, type) per table, in declaration order, parsed from the DDL."""
+    import re
+    text = open(SCHEMA_SQL).read()
+    out = {}
+    for m in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\);", text, re.S):
+        cols = []
+        for line in m.group(2).split("\n"):
+            line = line.split("--")[0].strip().rstrip(",")
+            if not line or line.upper().startswith(
+                    ("PRIMARY KEY", "FOREIGN KEY", "UNIQUE", "CONSTRAINT")):
+                continue
+            parts = line.split()
+            cols.append((parts[0], " ".join(parts[1:2]).upper()))
+        out[m.group(1)] = cols
+    return out
+
+
+def check_value(val: str, sqltype: str) -> str | None:
+    if val == "":
+        return None                      # NULL, allowed by COPY ... NULL ''
+    try:
+        if sqltype in ("INT", "BIGINT"):
+            int(val)
+        elif sqltype == "DOUBLE":
+            float(val)
+        elif sqltype == "BOOLEAN":
+            if val.lower() not in ("true", "false", "t", "f", "1", "0"):
+                return "not a boolean"
+        elif sqltype == "DATE":
+            datetime.strptime(val, "%Y-%m-%d")
+        elif sqltype == "TIMESTAMPTZ":
+            datetime.strptime(val, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        return f"not {sqltype.lower()}"
+    return None
+
+
+def validate() -> bool:
+    ddl, bad = ddl_columns(), 0
+    for table, cols in ddl.items():
+        path = os.path.join(OUT, f"{table}.csv")
+        if not os.path.exists(path):
+            continue
+        with open(path) as fh:
+            rows = csv.reader(fh)
+            header = next(rows)
+            names = [c for c, _ in cols]
+            if header != names:
+                print(f"  FAIL {table}: header/DDL order differs\n"
+                      f"       ddl {names}\n       csv {header}")
+                bad += 1
+                continue
+            for n, row in enumerate(rows, start=2):
+                for (col, sqltype), val in zip(cols, row):
+                    err = check_value(val, sqltype)
+                    if err:
+                        print(f"  FAIL {table} line {n} column {col}: "
+                              f"{val!r} is {err}")
+                        bad += 1
+                        break
+                if bad:
+                    break
+    print("  validation: OK, every column parses as its DDL type" if not bad
+          else f"  validation: {bad} table(s) FAILED -- do not load")
+    return bad == 0
+
+
 def main() -> None:
     os.makedirs(OUT, exist_ok=True)
     print(f"generating -> {OUT}")
@@ -329,6 +407,9 @@ def main() -> None:
     print(f"\n  delivered {delivered:,} | SLA breach {breached:,} "
           f"({breached / max(delivered, 1):.1%}) | duplicates ~{DUP_RATE:.0%} | "
           f"anomalies ~{ANOMALY_RATE:.0%}")
+
+    if not validate():
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
