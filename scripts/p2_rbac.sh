@@ -68,6 +68,14 @@ for c in landing external docs; do
   assign "$SP_BLOB" "Storage Blob Data Reader" "$SA_ID/blobServices/default/containers/$c"
 done
 
+# Snowflake asks the storage account for a user delegation key, which it then
+# uses to mint short-lived SAS tokens. That operation is only grantable at
+# ACCOUNT scope -- a container-scoped role cannot cover it, which is why
+# SYSTEM$VERIFY_EXTERNAL_VOLUME reports read/write/list/delete PASSED and
+# azureGetUserDelegationKeyResult FAILED with 403 without it.
+printf "\n== Account-scope delegation key\n"
+assign "$SP_BLOB" "Storage Blob Delegator" "$SA_ID"
+
 printf "\n== Queue\n"
 assign "$SP_QUEUE" "Storage Queue Data Contributor" "$SA_ID/queueServices/default/queues/snowpipe-queue"
 
