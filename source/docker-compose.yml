@@ -1,0 +1,82 @@
+name: qcpoc
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: qc-postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical          # required for Debezium
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+    environment:
+      POSTGRES_DB: qcommerce
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres  # local throwaway container only
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./out:/seed:ro             # generated CSVs, loaded by 02_load.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qcommerce"]
+      interval: 5s
+      retries: 12
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: qc-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr=INTERNAL://redpanda:9092,EXTERNAL://localhost:19092
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      retries: 20
+
+  console:
+    image: redpandadata/console:v2.7.2
+    container_name: qc-console
+    depends_on: [redpanda]
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      CONNECT_ENABLED: "true"
+      CONNECT_CLUSTERS_NAME: qc-connect
+      CONNECT_CLUSTERS_URL: http://connect:8083
+    ports:
+      - "8080:8080"
+
+  connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: qc-connect
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: qc-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      # Snowflake sink jar is dropped into ./connectors/plugins at Part 3.
+      # Uncomment the proxy lines if your host needs one to reach Snowflake.
+      # JAVA_OPTS: "-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"
+      ENABLE_DEBEZIUM_SCRIPTING: "true"
+    volumes:
+      - ./connectors/plugins:/kafka/connect/extra:ro
+    ports:
+      - "8083:8083"

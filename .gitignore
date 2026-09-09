@@ -34,3 +34,6 @@ data/generated/
 .DS_Store
 .idea/
 .vscode/
+
+# generated source data — regenerate with source/generate.py
+source/out/
