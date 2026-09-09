@@ -166,7 +166,8 @@ did.
 | Stage | Status | What it means in business terms |
 |---|---|---|
 | Capability assessment | ✅ Done | Confirmed what the platform can and cannot do (see §9) |
-| **Source systems** | ✅ **Done** | The operational database, its live change feed, and the app event stream are running and producing data |
+| **Source systems** | ✅ Done | The operational database, its live change feed, and the app event stream are running and producing data |
+| **Cloud storage and access** | ✅ **Done** | File storage created in the same region as the platform, with four separate areas for arriving files, archives, partner data and documents. The platform has been granted least-privilege access to each: it can write only to the archive, and read the rest |
 | Platform foundation | ✅ **Done** | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
 | Data arrival | 🔜 Next | Connecting all fourteen routes data takes into the platform |
 | Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
