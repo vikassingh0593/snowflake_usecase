@@ -44,12 +44,14 @@ else
   # Hierarchical namespace must be OFF. With HNS on, the Iceberg dfs endpoint
   # was still Preview as of March 2026, and COPY ... PURGE fails because Azure
   # only deletes empty directories. Plain GPv2 blob is the GA path.
-  if [ "$SA_LOC" = "$LOC" ] && [ "$SA_HNS" = "False" ]; then
+  # isHnsEnabled reports None when the flag was never set, which means
+  # DISABLED. Only True is disqualifying.
+  if [ "$SA_LOC" = "$LOC" ] && [ "$SA_HNS" != "True" ]; then
     REUSE=yes
   else
     REUSE=no
     [ "$SA_LOC" != "$LOC" ] && echo "  REJECT: not in $LOC"
-    [ "$SA_HNS" != "False" ] && echo "  REJECT: hierarchical namespace is on — breaks Iceberg and COPY ... PURGE"
+    [ "$SA_HNS" = "True" ] && echo "  REJECT: hierarchical namespace is on — breaks Iceberg and COPY ... PURGE"
   fi
 fi
 
@@ -58,8 +60,18 @@ if [ "$REUSE" = "yes" ]; then
   TARGET_SA="$SA"; TARGET_RG="$SA_RG"
   echo "  reuse $SA in $SA_RG"
 else
-  TARGET_SA="snowflakeqcpoc$RANDOM"; TARGET_RG="$RG"
-  echo "  create a fresh account: $TARGET_SA in $TARGET_RG ($LOC)"
+  # Reuse an account this script already created, so re-running does not
+  # mint a second one. Only invent a name when rg-qcpoc has none.
+  EXISTING=$(az storage account list -g "$RG" \
+             --query "[?starts_with(name,'snowflakeqcpoc')] | [0].name" -o tsv 2>/dev/null || true)
+  TARGET_RG="$RG"
+  if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+    TARGET_SA="$EXISTING"; REUSE=yes
+    echo "  reuse $TARGET_SA, already created in $TARGET_RG"
+  else
+    TARGET_SA="snowflakeqcpoc$RANDOM"
+    echo "  create a fresh account: $TARGET_SA in $TARGET_RG ($LOC)"
+  fi
 fi
 
 if [ "$CREATE" != "1" ]; then
@@ -103,7 +115,18 @@ az storage queue create -n "$QUEUE" --account-name "$TARGET_SA" --auth-mode logi
 echo "  queue $QUEUE"
 
 blue "Event Grid -> storage queue (Snowpipe auto-ingest)"
+# Registration is asynchronous. Creating the system topic before it finishes
+# fails with "Couldn't verify the source resource", which reads like a
+# permissions problem and is not one.
 az provider register --namespace Microsoft.EventGrid -o none
+for i in $(seq 1 30); do
+  STATE=$(az provider show -n Microsoft.EventGrid --query registrationState -o tsv)
+  [ "$STATE" = "Registered" ] && break
+  echo "  Microsoft.EventGrid: $STATE (waiting, ${i}/30)"
+  sleep 10
+done
+[ "$STATE" = "Registered" ] || { echo "  provider still $STATE after 5 min - re-run this script"; exit 1; }
+
 SA_ID=$(az storage account show -n "$TARGET_SA" -g "$TARGET_RG" --query id -o tsv)
 
 az eventgrid system-topic create -n st-qcpoc -g "$TARGET_RG" -l "$LOC" \
