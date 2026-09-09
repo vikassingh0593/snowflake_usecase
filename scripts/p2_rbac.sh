@@ -72,9 +72,10 @@ printf "\n== Queue\n"
 assign "$SP_QUEUE" "Storage Queue Data Contributor" "$SA_ID/queueServices/default/queues/snowpipe-queue"
 
 printf "\n== Assignments now in place\n"
-az role assignment list --scope "$SA_ID" --include-inherited=false --all \
-  --query "[].{principal:principalName, role:roleDefinitionName, scope:scope}" -o table 2>/dev/null \
-  || az role assignment list --scope "$SA_ID" --all -o table
+# --all conflicts with --scope; listing at the storage account scope already
+# includes the container and queue child scopes.
+az role assignment list --scope "$SA_ID" \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
 
 cat <<'EOF'
 
