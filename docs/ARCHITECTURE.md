@@ -395,7 +395,70 @@ Key-pair auth only; no password in any file. `rsa_key*` and `.env` stay out of g
 
 ---
 
-## 16. Out of scope
+## 16. As built — real identifiers and what differed from the design
+
+Everything below is verified, not planned. Design sections above describe intent;
+this section is the account as it actually stands on 2026-09-09.
+
+### Identifiers
+
+| | |
+|---|---|
+| Snowflake account | `AWTTGVH-OLB61128`, locator `OOB49311`, `AWS_US_WEST_2`, version 10.31.103 |
+| Connection | `snow -c qcpoc`, `authenticator = OAUTH_AUTHORIZATION_CODE` in `~/.snowflake/connections.toml` |
+| Azure subscription | `d27ba827-26e0-419a-bc0b-2b1015e641bb` |
+| Azure tenant | `985bb39b-768f-4cc6-ba0f-0f544b826143` |
+| Storage account | `snowflakeqcpoc25056`, RG `rg-qcpoc`, `westus2`, GPv2, HNS off |
+| Blob principal | `n1fam5snowflakepacint`, object id `5dec4f6c-0618-4fc6-a045-f7549a299115` |
+| Queue principal | `14bjnhsnowflakepacint`, object id `a23e7398-bca1-439f-aa8d-7148bae08ea2` |
+
+**Two service principals, not one.** The external volume and the storage
+integration share `n1fam5snowflakepacint`; the notification integration gets its
+own app with a different client id. Two consent URLs, not three, and not one.
+
+### Deltas from the design
+
+| Designed | As built | Why |
+|---|---|---|
+| Reuse `snowflakefreeedition` if suitable | Fresh account `snowflakeqcpoc25056` | The existing account is in `eastus2`, not `westus2`. Its HNS flag was unset, which means off — the region alone disqualified it |
+| Warehouses as created | `GENERATION = '1'` set explicitly | Gen2 became the default in behaviour-change bundle 2026_03. It accelerates large scans and DML; at 200k rows the bottleneck is warehouse resume and cloud services, so the rate would apply and the benefit would not. Multiplier UNVERIFIED, commonly quoted ~1.35× |
+| Warehouses as created | `ENABLE_QUERY_ACCELERATION = FALSE` | On by default. Bills as serverless credits `RM_POC` cannot see |
+| `RM_POC` triggers | `NOTIFY_USERS` added | Triggers at 50/75/90% existed with no recipients, so the first real signal would have been the 100% suspend |
+| Container-scoped RBAC only | Plus `Storage Blob Delegator` at **account** scope | `generateUserDelegationKey` is an account-scope operation. Without it `SYSTEM$VERIFY_EXTERNAL_VOLUME` returns `success:false` with read, write, list and delete all `PASSED` — a distinctive failure worth recognising |
+| `RESOURCE_CONSTRAINT` to set generation | `GENERATION` property | Snowflake rejects the former: *"Use the GENERATION property to set warehouse hardware generation."* |
+
+### Verified
+
+```
+SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')
+  success        true
+  write/read/list/delete       PASSED
+  azureGetUserDelegationKey    PASSED
+  region         westus2
+```
+
+`LIST @STG_LANDING` returns zero rows. That is the success case: an empty
+container listed without an authorisation error proves the credential works.
+
+### Not yet done
+
+- **Account budget** — the only control covering serverless spend. `RM_POC` sees
+  virtual-warehouse credits only, and Snowpipe, Snowpipe Streaming, dynamic table
+  refresh and search optimization are all invisible to it. Set in Snowsight →
+  Admin → Cost Management → Budgets, 80 credits.
+- **Service user keys** — `SVC_KAFKA` and `SVC_CI` exist with `TYPE = SERVICE` and
+  no `RSA_PUBLIC_KEY`. Browser auth cannot work for a headless connector, so both
+  need a key pair before Part 3.
+- **Enterprise confirmation** — masking policies, row access policies, aggregation
+  policies and materialized views all resolve under `SHOW`, and `ACCESS_HISTORY`
+  reads. That is strong evidence, not proof: a `SHOW` returning an empty set
+  misled this build once already. Confirm with a `CREATE MASKING POLICY` in a
+  throwaway database before §12 is built on it.
+- **All 14 ingestion mechanisms.** Zero rows in `RAW`.
+
+---
+
+## 17. Out of scope
 
 Snowpark Container Services · Notebooks on Container Runtime · ML Jobs · Openflow ·
 replication / failover / client redirect · clean rooms · Cortex fine-tuning · Warehouse

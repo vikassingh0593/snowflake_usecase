@@ -168,14 +168,34 @@ did.
 | Capability assessment | ✅ Done | Confirmed what the platform can and cannot do (see §9) |
 | **Source systems** | ✅ Done | The operational database, its live change feed, and the app event stream are running and producing data |
 | **Cloud storage and access** | ✅ **Done** | File storage created in the same region as the platform, with four separate areas for arriving files, archives, partner data and documents. The platform has been granted least-privilege access to each: it can write only to the archive, and read the rest |
-| Platform foundation | ✅ **Done** | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
-| Data arrival | 🔜 Next | Connecting all fourteen routes data takes into the platform |
+| Platform foundation | ✅ Done | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
+| Data arrival | 🔜 **Next** | Connecting all fourteen routes data takes into the platform. **None built yet — this is where work resumes** |
 | Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
 | Risk prediction | ⬜ | Training and deploying the late-delivery model |
 | Forecasting and text analysis | ⬜ | Demand forecast, anomaly detection, complaint analysis |
 | Operations console | ⬜ | The four-view application, including the learning feedback loop |
 | Governance | ⬜ | Access controls, quality alerts, cost reporting |
 | Sharing | ⬜ | Publishing data to partners and external consumers |
+
+---
+
+### Where things stand, in one sentence
+
+**Both ends are built; nothing has crossed between them yet.** The operational
+system is producing data and the analytics platform is ready to receive it, and the
+layer that carries data from one to the other is the entire next stage.
+
+| | |
+|---|---|
+| Records waiting in the source system | 170,343 |
+| App events waiting in the stream | 79,663 |
+| Records inside the analytics platform | **0** |
+| Arrival routes connected | **0 of 14** |
+| Cloud spend so far | 3.78 of ~200 credits |
+
+Nothing has been wasted in that: the foundation is the part that cannot be
+rushed later, and every access grant, spending control and storage permission is
+now verified rather than assumed.
 
 ---
 
