@@ -37,13 +37,14 @@ SHOW RESOURCE MONITORS LIKE 'RM_POC';   -- notify_users should now be populated
 --    confirmed in the docs I could reach. Against a ~112 credit budget that is
 --    roughly 39 credits of exposure, which is worth five minutes to avoid.
 --
---    RUN THIS SECTION SEPARATELY. If the ALTER is rejected, use the recreate
---    block below instead -- the warehouses are empty, so recreating costs
---    nothing.
+--    Confirmed working: ALTER ... SET GENERATION = '1'.
 -- -----------------------------------------------------------------------------
-ALTER WAREHOUSE WH_INGEST_XS    SET RESOURCE_CONSTRAINT = 'STANDARD_GEN_1';
-ALTER WAREHOUSE WH_TRANSFORM_XS SET RESOURCE_CONSTRAINT = 'STANDARD_GEN_1';
-ALTER WAREHOUSE WH_APP_XS       SET RESOURCE_CONSTRAINT = 'STANDARD_GEN_1';
+-- RESOURCE_CONSTRAINT is rejected: "Use the GENERATION property to set
+-- warehouse hardware generation." Altering in place works, so the recreate
+-- fallback below is not needed and the grants survive.
+ALTER WAREHOUSE WH_INGEST_XS    SET GENERATION = '1';
+ALTER WAREHOUSE WH_TRANSFORM_XS SET GENERATION = '1';
+ALTER WAREHOUSE WH_APP_XS       SET GENERATION = '1';
 
 SHOW WAREHOUSES LIKE 'WH_%';   -- check the generation column
 
