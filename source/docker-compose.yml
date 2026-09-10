@@ -19,6 +19,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      - pgdata:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - ./out:/seed:ro             # generated CSVs, loaded by 02_load.sh
     healthcheck:
@@ -38,6 +39,8 @@ services:
       - --check=false
       - --kafka-addr=INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
       - --advertise-kafka-addr=INTERNAL://redpanda:9092,EXTERNAL://localhost:19092
+    volumes:
+      - rpdata:/var/lib/redpanda/data
     ports:
       - "19092:19092"
       - "9644:9644"
@@ -81,3 +84,13 @@ services:
       - ./connectors/plugins/v3:/kafka/connect/snowflake-v3
     ports:
       - "8083:8083"
+
+# Named volumes so `docker compose down` (without -v) keeps both the Postgres
+# tables and the Redpanda topics. `down -v` still destroys them, which is what
+# silently emptied qc.order_status: the topic was produced by hand rather than
+# by a connector that would re-snapshot, so unlike the Debezium topics it did
+# not come back. Use `docker compose stop` to pause, `down` to remove
+# containers, and `-v` only when you intend to reseed from scratch.
+volumes:
+  pgdata:
+  rpdata:
