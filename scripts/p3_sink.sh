@@ -16,6 +16,13 @@
 # Both connectors read the SAME topic into DIFFERENT tables. Connect derives the
 # consumer group from the connector name, so they consume independently and each
 # sees all 79,663 events -- which is what makes the comparison fair.
+#
+# SCHEMATIZATION IS FORCED OFF on both. v4 flipped the default to true, where v3
+# defaulted false. Left alone, v4 would infer typed columns from the JSON and v3
+# would not, so the two tables would have different shapes and the comparison
+# would be measuring the wrong thing. Off also matches the design: RAW holds the
+# payload as VARIANT and typing happens in CORE, so a producer adding a field
+# never breaks ingestion.
 # =============================================================================
 set -euo pipefail
 
@@ -66,6 +73,7 @@ case "$cmd" in
     "tasks.max": "3",
     "snowflake.topic2table.map": "$TOPIC:ORDER_STATUS_KAFKA_V4",
     "snowflake.streaming.classic.offset.migration": "skip",
+    "snowflake.enable.schematization": "false",
 JSON
     ;;
   v3)
@@ -77,6 +85,7 @@ JSON
     "connector.class": "com.snowflake.kafka.connector.SnowflakeSinkConnector",
     "snowflake.ingestion.method": "SNOWPIPE",
     "tasks.max": "1",
+    "snowflake.enable.schematization": "false",
     "snowflake.topic2table.map": "$TOPIC:ORDER_STATUS_KAFKA_V3FILE",
     "buffer.count.records": "10000",
     "buffer.flush.time": "60",
