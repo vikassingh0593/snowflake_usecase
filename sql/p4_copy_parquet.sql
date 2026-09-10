@@ -182,7 +182,14 @@ FROM (
   UNION ALL SELECT '999001,42,3'                   -- one column short
   UNION ALL SELECT '999002,42,3,NOT_A_NUMBER'      -- total is not numeric
 )
-FILE_FORMAT = (TYPE = CSV COMPRESSION = NONE)
+-- The rows are pre-formatted CSV text in ONE column, so the unload must not
+-- treat the embedded commas as anything. Left at defaults, CSV unload quotes a
+-- field containing the delimiter -- every line becomes "800000,42,3,50000",
+-- one field instead of four, and the reload rejects all 200 good rows for
+-- column count rather than the 3 intended ones.
+FILE_FORMAT = (TYPE = CSV COMPRESSION = NONE
+               FIELD_OPTIONALLY_ENCLOSED_BY = NONE
+               ESCAPE_UNENCLOSED_FIELD = NONE)
 SINGLE = TRUE
 OVERWRITE = TRUE;
 
