@@ -163,7 +163,17 @@ GRANT SELECT ON FUTURE VIEWS IN SCHEMA QCOMMERCE.SEMANTIC TO ROLE QC_ANALYST;
 -- Generate the keys BEFORE running this section:
 --   openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_kafka.p8 -nocrypt
 --   openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
---   grep -v "^-----" rsa_kafka.pub | tr -d '\n'
+--   grep -v "^-----" rsa_kafka.pub | tr -d '\n' | pbcopy
+--
+-- Piped to pbcopy, not printed. Printed, zsh appends a '%' to mark the missing
+-- trailing newline; copied along with the key that is 393 characters instead
+-- of 392 and no longer valid base64. Without pbcopy, append '; echo'.
+--
+-- Then verify the stored key is the key on disk, rather than trusting that
+-- ALTER USER returned successfully:
+--   openssl rsa -pubin -in rsa_kafka.pub -outform DER 2>/dev/null \
+--     | openssl dgst -sha256 -binary | openssl enc -base64
+-- must equal RSA_PUBLIC_KEY_FP from DESC USER, after the SHA256: prefix.
 -- Paste that single line below. Never commit the .p8 files.
 -- -----------------------------------------------------------------------------
 CREATE USER IF NOT EXISTS SVC_KAFKA

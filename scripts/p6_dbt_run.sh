@@ -13,7 +13,16 @@
 #   openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_ci.p8 -nocrypt
 #   openssl rsa -in rsa_ci.p8 -pubout -out rsa_ci.pub
 #   chmod 600 rsa_ci.p8
-#   grep -v "^-----" rsa_ci.pub | tr -d '\n'
+#   grep -v "^-----" rsa_ci.pub | tr -d '\n' | pbcopy
+#
+# Piped to pbcopy, not printed. Printed, zsh appends a '%' to mark the missing
+# trailing newline, and that '%' gets copied with the key -- 393 characters
+# instead of 392, no longer valid base64. Without pbcopy, append '; echo'.
+#
+# Verify what was stored rather than trusting the success message:
+#   openssl rsa -pubin -in rsa_ci.pub -outform DER 2>/dev/null \
+#     | openssl dgst -sha256 -binary | openssl enc -base64
+# must equal RSA_PUBLIC_KEY_FP from DESC USER SVC_CI, after the SHA256: prefix.
 #
 # then ONE statement in Snowflake, with that single line pasted in:
 #   ALTER USER SVC_CI SET RSA_PUBLIC_KEY = '<paste>';
