@@ -108,13 +108,14 @@ USING TEMPLATE (
   ))
 );
 
--- Dry run first. VALIDATION_MODE parses the files and reports what WOULD fail
--- without writing a row -- the cheap way to find out a backfill is malformed.
-COPY INTO RAW.ORDER_BACKFILL
-FROM @LAND.STG_BACKFILL/v1/
-FILE_FORMAT = (FORMAT_NAME = LAND.FF_PARQUET)
-MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
-VALIDATION_MODE = RETURN_10_ROWS;
+-- Look before loading. VALIDATION_MODE cannot be used here: Snowflake counts
+-- MATCH_BY_COLUMN_NAME as a transform and rejects the combination outright.
+-- Querying the stage does the same job for Parquet -- and VALIDATION_MODE gets
+-- its proper outing in section 5, on the malformed CSV, which is the case it
+-- exists for.
+SELECT $1 AS parquet_row
+FROM @LAND.STG_BACKFILL/v1/ (FILE_FORMAT => 'LAND.FF_PARQUET')
+LIMIT 5;
 
 -- The real load. MATCH_BY_COLUMN_NAME is what makes column ORDER irrelevant.
 COPY INTO RAW.ORDER_BACKFILL
@@ -154,3 +155,59 @@ FROM TABLE(INFORMATION_SCHEMA.COPY_HISTORY(
   TABLE_NAME => 'QCOMMERCE.RAW.ORDER_BACKFILL',
   START_TIME => DATEADD(hour, -2, CURRENT_TIMESTAMP())))
 ORDER BY LAST_LOAD_TIME;
+
+-- -----------------------------------------------------------------------------
+-- 5. A deliberately bad file, then VALIDATE().
+--
+-- Every load so far succeeded, which proves nothing about what happens when one
+-- does not. This writes a CSV with three broken rows among the good ones:
+-- a non-numeric order_id, a missing column and an oversized value.
+--
+-- ON_ERROR = CONTINUE loads what it can and keeps going. VALIDATE() then
+-- reports exactly which rows were rejected and why -- after the fact, from the
+-- load's own history, without re-reading the file.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE STAGE LAND.STG_BADFILE
+  STORAGE_INTEGRATION = SI_QC_AZURE
+  URL = 'azure://snowflakeqcpoc25056.blob.core.windows.net/archive/badfile/'
+  COMMENT = 'deliberate bad-file test';
+
+-- Good rows and bad rows in one file, written as raw text so the errors survive.
+COPY INTO @LAND.STG_BADFILE/orders_bad/
+FROM (
+  SELECT order_id::STRING || ',' || customer_id::STRING || ',' ||
+         store_id::STRING || ',' || order_total_paise::STRING AS line
+  FROM   RAW.TMP_BACKFILL SAMPLE (200 ROWS)
+  UNION ALL SELECT 'NOT_A_NUMBER,42,3,50000'      -- order_id is not numeric
+  UNION ALL SELECT '999001,42,3'                   -- one column short
+  UNION ALL SELECT '999002,42,3,NOT_A_NUMBER'      -- total is not numeric
+)
+FILE_FORMAT = (TYPE = CSV COMPRESSION = NONE)
+SINGLE = TRUE
+OVERWRITE = TRUE;
+
+CREATE OR REPLACE TABLE RAW.ORDER_BADFILE_TEST (
+  ORDER_ID          NUMBER,
+  CUSTOMER_ID       NUMBER,
+  STORE_ID          NUMBER,
+  ORDER_TOTAL_PAISE NUMBER
+);
+
+-- Dry run. No transform here, so VALIDATION_MODE works: it reports the errors
+-- it WOULD hit and writes nothing.
+COPY INTO RAW.ORDER_BADFILE_TEST
+FROM @LAND.STG_BADFILE/orders_bad/
+FILE_FORMAT = (TYPE = CSV COMPRESSION = NONE FIELD_DELIMITER = ',')
+VALIDATION_MODE = RETURN_ERRORS;
+
+-- Now load for real, skipping the bad rows rather than aborting.
+COPY INTO RAW.ORDER_BADFILE_TEST
+FROM @LAND.STG_BADFILE/orders_bad/
+FILE_FORMAT = (TYPE = CSV COMPRESSION = NONE FIELD_DELIMITER = ',')
+ON_ERROR = CONTINUE;
+
+SELECT COUNT(*) AS good_rows_loaded FROM RAW.ORDER_BADFILE_TEST;
+
+-- VALIDATE() reads the load history of the statement that just ran. This is
+-- the post-mortem: which rows failed, in which file, at which byte offset.
+SELECT * FROM TABLE(VALIDATE(RAW.ORDER_BADFILE_TEST, JOB_ID => '_last'));
