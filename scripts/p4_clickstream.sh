@@ -11,6 +11,22 @@
 # files somewhere with write access keeps that intact instead of widening the
 # grant for test data.
 #
+# PREREQUISITE, once per storage account. Owning the subscription lets you
+# CREATE the storage account but grants no blob data access - control plane and
+# data plane are separate in Azure, which is the same distinction that made
+# SYSTEM$VERIFY_EXTERNAL_VOLUME fail on the delegation key. Without it,
+# --auth-mode login returns "You do not have the required permissions":
+#
+#   ME=$(az ad signed-in-user show --query id -o tsv)
+#   az role assignment create --assignee-object-id "$ME" \
+#     --assignee-principal-type User --role "Storage Blob Data Contributor" \
+#     --scope "/subscriptions/<sub>/resourceGroups/rg-qcpoc/providers/Microsoft.Storage/storageAccounts/<sa>"
+#
+# Deliberately not --auth-mode key. The account key is unscoped, never expires
+# and would sit in shell history; a scoped grant on your own identity costs one
+# command. Note the asymmetry: Snowflake's principal has READER on landing/
+# because it only reads, while the producer needs CONTRIBUTOR.
+#
 #   git clone/pull, then:
 #   bash scripts/p4_clickstream.sh              24 files, ~50k events
 #   HOURS=4 TARGET=8000 bash scripts/p4_clickstream.sh    quick test
