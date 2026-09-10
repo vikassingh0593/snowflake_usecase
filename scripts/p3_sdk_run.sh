@@ -25,7 +25,11 @@ cd "$(dirname "$0")/.."
 [ -f rsa_kafka.p8 ] || { echo "rsa_kafka.p8 not found in repo root"; exit 1; }
 [ -f source/out/order_status.ndjson ] || { echo "run source/generate.py first"; exit 1; }
 
+# SS_LOG_LEVEL quiets the Rust core, which logs every channel, token refresh
+# and telemetry flush at INFO and buries the script's own output. Set it to
+# info when diagnosing an ingestion problem.
 docker run --rm -it \
+  -e SS_LOG_LEVEL="${SS_LOG_LEVEL:-warn}" \
   -v "$PWD":/work -w /work \
   python:3.12-slim \
   bash -c "pip install -q --disable-pip-version-check snowpipe-streaming \
