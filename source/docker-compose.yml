@@ -72,10 +72,12 @@ services:
       STATUS_STORAGE_TOPIC: _connect_status
       CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      # Snowflake sink jar is dropped into ./connectors/plugins at Part 3.
+      # Snowflake sink jars live in ./connectors/plugins/{v3,v4}, one plugin
+      # directory each so their classloaders stay separate.
       # Uncomment the proxy lines if your host needs one to reach Snowflake.
       # JAVA_OPTS: "-Dhttps.proxyHost=<host> -Dhttps.proxyPort=<port>"
     volumes:
-      - ./connectors/plugins:/kafka/connect/extra
+      - ./connectors/plugins/v4:/kafka/connect/snowflake-v4
+      - ./connectors/plugins/v3:/kafka/connect/snowflake-v3
     ports:
       - "8083:8083"

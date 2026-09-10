@@ -1,56 +1,64 @@
 #!/usr/bin/env bash
 # =============================================================================
-# scripts/p3_connector.sh — install the Snowflake Kafka Connector v4 into the
-# running Kafka Connect container. Run on your Mac, from the repo root.
+# scripts/p3_connector.sh — install both Snowflake Kafka connectors.
+# Run on your Mac, from the repo root.
 #
-# v4.1.0 is the current release: a ground-up rewrite on the Snowpipe Streaming
-# High-Performance Architecture (v4.0 GA 2026-04-20). Up to 10 GB/s per table,
-# 5-10s end to end, exactly-once and ordered.
+# TWO connectors, because v4 dropped file mode:
+#   v4.1.0  SnowflakeStreamingSinkConnector  — mechanism 1, Snowpipe Streaming
+#   v3.5.4  SnowflakeSinkConnector           — mechanism 3, Snowpipe file mode
 #
-# The jar is ~170 MB. It lands in source/connectors/plugins/, which is already
-# mounted writable into the container and gitignored below.
+# v4 is a ground-up rewrite on the Snowpipe Streaming High-Performance
+# Architecture and supports streaming only. Comparing streaming against file
+# mode therefore needs both majors installed side by side, which is itself the
+# clearest statement of what changed between them.
+#
+# They go in separate directories under plugin.path: Kafka Connect isolates a
+# classloader per plugin directory, and two versions of the same packages in
+# one directory would collide.
 # =============================================================================
 set -euo pipefail
 
-VER="${VER:-4.1.0}"
-DIR="source/connectors/plugins"
-JAR="$DIR/snowflake-kafka-connector-$VER.jar"
-URL="https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector/$VER/snowflake-kafka-connector-$VER.jar"
+V4="${V4:-4.1.0}"
+V3="${V3:-3.5.4}"
+BASE="https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector"
 
-mkdir -p "$DIR"
+fetch() {   # fetch <version> <dir>
+  local ver="$1" dir="source/connectors/plugins/$2"
+  local jar="$dir/snowflake-kafka-connector-$ver.jar"
+  mkdir -p "$dir"
+  if [ -f "$jar" ]; then
+    echo "  v$ver already present ($(du -h "$jar" | cut -f1))"
+  else
+    echo "  downloading v$ver"
+    curl -fL --progress-bar -o "$jar.part" "$BASE/$ver/snowflake-kafka-connector-$ver.jar"
+    mv "$jar.part" "$jar"
+    echo "  v$ver $(du -h "$jar" | cut -f1)"
+  fi
+}
 
-if [ -f "$JAR" ]; then
-  echo "== already present: $JAR ($(du -h "$JAR" | cut -f1))"
-else
-  echo "== downloading v$VER (~170 MB)"
-  curl -fL --progress-bar -o "$JAR.part" "$URL"
-  mv "$JAR.part" "$JAR"
-  echo "   $(du -h "$JAR" | cut -f1)"
-fi
+echo "== jars"
+fetch "$V4" v4
+fetch "$V3" v3
 
-echo "== restarting Kafka Connect to pick up the plugin"
-docker compose -f source/docker-compose.yml restart connect
+echo "== restarting Kafka Connect"
+docker compose -f source/docker-compose.yml up -d connect   # picks up the new mounts
 
 echo "== waiting for the REST API"
-for i in $(seq 1 30); do
-  if curl -fs localhost:8083/ >/dev/null 2>&1; then break; fi
+for i in $(seq 1 40); do
+  curl -fs localhost:8083/ >/dev/null 2>&1 && break
   printf '.'; sleep 5
 done
 echo
 
-# Do not guess the class name. v4 is a rewrite and may not use the v3 class.
-# Connect reports exactly what it loaded, which is the authoritative answer.
-echo "== sink connector classes Connect can see"
+echo "== Snowflake classes Connect loaded"
 curl -s localhost:8083/connector-plugins | python3 -c '
 import json, sys
+found = 0
 for p in json.load(sys.stdin):
     cls = p.get("class", "")
-    if p.get("type") == "sink" or "snowflake" in cls.lower():
-        print("  " + cls + "   type=" + str(p.get("type")) + "  version=" + str(p.get("version")))
+    if "snowflake" in cls.lower():
+        found += 1
+        print("  " + cls + "  version=" + str(p.get("version")))
+if not found:
+    print("  none yet - Connect may still be scanning the jars, retry in 30s")
 '
-cat <<'EOF'
-
-== Next
-  Paste the Snowflake class name above back, and the sink config gets written
-  against the real class rather than a guessed one.
-EOF
