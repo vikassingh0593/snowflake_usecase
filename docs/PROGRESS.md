@@ -69,6 +69,36 @@ twice — the policy way and the view way — and compares them. Still unproven 
 
 ---
 
+## Session 2 — 2026-09-10
+
+### Enterprise confirmed, by CREATE rather than SHOW
+
+`CREATE MASKING POLICY` succeeded. This was the last open question from Part 0
+and the only one that could not be settled by reading: `SHOW` returning rows
+proved nothing, because `SHOW` returns an empty set rather than an error for a
+feature the edition does not have. Governance now builds both the policy path
+and the secure-view path and compares them, as designed.
+
+### Also done
+
+- `SVC_KAFKA` key pair registered, `HAS_KEYPAIR = true`
+- `CREATE STAGE` and `CREATE PIPE` granted on `RAW` — file mode creates both in
+  the target table's schema, and the bootstrap only granted them on `LAND`
+- `RAW.ORDER_STATUS_SDK` created for the direct-SDK mechanism
+- `OPS.PIPELINE_LOG`, `OPS.DQ_RESULTS`, `OPS.INGEST_BENCHMARK` created
+
+The `GRANT ... ON FUTURE TABLES IN SCHEMA RAW` from the bootstrap fired as
+intended: `ORDER_STATUS_SDK` picked up `INSERT` and `SELECT` for `QC_LOADER` at
+creation with no extra statement.
+
+### Note on reading output
+
+`snow sql` renders wide `SHOW` results one character per column, which is
+unreadable. Use `--format json` for those, or run them in the VS Code extension,
+which gives a grid.
+
+---
+
 ## Resume here
 
 ### 1. Bring the source stack back up

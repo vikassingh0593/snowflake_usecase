@@ -429,6 +429,14 @@ own app with a different client id. Two consent URLs, not three, and not one.
 
 ### Verified
 
+**Enterprise, confirmed by `CREATE` on 2026-09-10.** `CREATE MASKING POLICY`
+succeeded in a throwaway database and `SHOW` returned the row. The earlier
+`SHOW`-based evidence is no longer the basis for §12 — the feature demonstrably
+works. Governance builds every control twice, the policy way and the view way.
+
+`SVC_KAFKA` has `HAS_KEYPAIR = true`, fingerprint
+`SHA256:9Z3+0YfSMK7BR5XdA1rZG0ixJBIodMcCMcSMiLZIuOc=`.
+
 ```
 SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')
   success        true
@@ -449,11 +457,6 @@ container listed without an authorisation error proves the credential works.
 - **Service user keys** — `SVC_KAFKA` and `SVC_CI` exist with `TYPE = SERVICE` and
   no `RSA_PUBLIC_KEY`. Browser auth cannot work for a headless connector, so both
   need a key pair before Part 3.
-- **Enterprise confirmation** — masking policies, row access policies, aggregation
-  policies and materialized views all resolve under `SHOW`, and `ACCESS_HISTORY`
-  reads. That is strong evidence, not proof: a `SHOW` returning an empty set
-  misled this build once already. Confirm with a `CREATE MASKING POLICY` in a
-  throwaway database before §12 is built on it.
 - **All 14 ingestion mechanisms.** Zero rows in `RAW`.
 
 ---
