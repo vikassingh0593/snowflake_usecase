@@ -239,6 +239,43 @@ class of data, two mechanisms, two levels of care.
 
 ---
 
+## Pausing — 2026-09-10
+
+Nothing in this project runs on a schedule, so there is nothing to switch off in
+Snowflake. Warehouses auto-suspend after 60 s and the last statement ran hours
+ago. Two things are worth knowing before walking away.
+
+**`PIPE_CLICKSTREAM_AUTO` is still armed.** `AUTO_INGEST = TRUE` means it keeps
+watching the Event Grid queue for blobs landing in `landing/`. Nothing will land
+while paused, so it should cost nothing — but an idle pipe's polling cost is
+UNVERIFIED and it is invisible to `RM_POC` either way. `SELECT
+SYSTEM$PIPE_STATUS(...)` tomorrow will show whether anything moved.
+
+**Stop the Docker stack with `stop`, not `down -v`.**
+
+```bash
+cd ~/Downloads/GIT/snowflake_usecase/source
+docker compose stop
+```
+
+`docker compose down -v` destroyed `qc.order_status` once already, and that
+topic was hand-produced with no way to re-snapshot it. Named volumes `pgdata`
+and `rpdata` now survive a `down`, but `-v` deletes them by definition.
+
+Azure keeps accruing a few rupees of hot blob. `landing/` expires after 14 days
+by lifecycle rule; `archive/`, `external/` and `docs/` do not, and the Iceberg
+metadata in `archive/` must not be deleted while `RAW.ORDER_EVENTS_ICEBERG`
+exists.
+
+**Still unset: the account budget.** Twelve routes have run against an account
+whose only spending control cannot see Snowpipe, Snowpipe Streaming or the
+Python UDFs that mechanisms 10 and 11 will add. 3.78 credits is the last
+verified figure and it predates Parts 3 through 6 entirely. Snowsight -> Admin
+-> Cost Management -> Budgets -> 80 credits. It takes a minute and it is the
+only control that would catch a mistake made while nobody is watching.
+
+---
+
 ## Resume here
 
 ### 1. Bring the source stack back up
