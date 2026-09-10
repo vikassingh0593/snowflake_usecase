@@ -217,4 +217,14 @@ SELECT COUNT(*) AS good_rows_loaded FROM RAW.ORDER_BADFILE_TEST;
 
 -- VALIDATE() reads the load history of the statement that just ran. This is
 -- the post-mortem: which rows failed, in which file, at which byte offset.
-SELECT * FROM TABLE(VALIDATE(RAW.ORDER_BADFILE_TEST, JOB_ID => '_last'));
+--
+-- JOB_ID => '_last' means the last COPY IN THIS SESSION. Run it in a separate
+-- invocation and it fails with "We couldn't find a copy for this table which
+-- occurred during this session" - the COPY and the VALIDATE have to share a
+-- session, or you pass the COPY's query_id explicitly:
+--
+--   SELECT QUERY_ID FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY())
+--   WHERE QUERY_TEXT ILIKE 'COPY INTO RAW.ORDER_BADFILE_TEST%'
+--   ORDER BY START_TIME DESC LIMIT 1;
+SELECT ERROR, LINE, CHARACTER, REJECTED_RECORD
+FROM TABLE(VALIDATE(RAW.ORDER_BADFILE_TEST, JOB_ID => '_last'));
