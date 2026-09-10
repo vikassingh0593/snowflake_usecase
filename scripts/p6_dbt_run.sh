@@ -53,15 +53,25 @@ case "$CMD" in
   *)     DBT_ARGS="$*" ;;
 esac
 
+# git is installed because dbt checks for it unconditionally -- dbt deps clones
+# packages -- and python:3.12-slim has none. Harmless today with no packages,
+# but it fails `dbt debug` and it will fail for real when Part 6 adds dbt_utils
+# for the (store_code, daypart) uniqueness test that seeds.yml currently notes
+# as absent.
+#
 # dbt-snowflake is left unpinned here and its version printed, because the
-# right pin is the one that actually resolved. Pin it in CI (Part 14) once
-# this run tells you what that is -- an unpinned build server is a different
-# problem from an unpinned laptop.
+# right pin is the one that actually resolved. First run resolved
+# dbt-core 1.12.4 / dbt-snowflake 1.12.0 -- pin that in CI (Part 14); an
+# unpinned build server is a different problem from an unpinned laptop.
+#
+# Every run reinstalls both. Fine for five runs; if Part 6 makes dbt a loop,
+# build this into a tagged image once instead.
 docker run --rm -it \
   -v "$PWD":/work -w /work/dbt \
   -e DBT_KEY_PATH=/work/rsa_ci.p8 \
   python:3.12-slim \
-  bash -c "pip install -q --disable-pip-version-check dbt-snowflake \
+  bash -c "apt-get -qq update && apt-get -qq install -y --no-install-recommends git \
+           && pip install -q --disable-pip-version-check --root-user-action=ignore dbt-snowflake \
            && dbt --version \
            && dbt $DBT_ARGS --profiles-dir . --target dev"
 
