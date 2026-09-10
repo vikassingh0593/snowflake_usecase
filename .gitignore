@@ -39,4 +39,4 @@ data/generated/
 source/out/
 
 # Kafka connector jar — 170 MB, fetched by scripts/p3_connector.sh
-source/connectors/plugins/*.jar
+source/connectors/plugins/**/*.jar

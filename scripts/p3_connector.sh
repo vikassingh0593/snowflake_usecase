@@ -36,12 +36,33 @@ fetch() {   # fetch <version> <dir>
   fi
 }
 
-echo "== jars"
+echo "== connector jars"
 fetch "$V4" v4
 fetch "$V3" v3
 
+# v4 does not bundle BouncyCastle FIPS; v3 does. The JDBC layer loads
+# BouncyCastleFipsProvider when building driver properties for key-pair auth,
+# so without these the v4 registration dies with NoClassDefFoundError long
+# before it reaches Snowflake. They go in the v4 plugin directory only, since
+# each directory is its own classloader.
+echo "== BouncyCastle FIPS for v4 key-pair auth"
+fetch_bc() {   # fetch_bc <artifact> <version>
+  local art="$1" ver="$2" dir="source/connectors/plugins/v4"
+  local jar="$dir/$art-$ver.jar"
+  if [ -f "$jar" ]; then
+    echo "  $art-$ver already present"
+  else
+    curl -fsSL -o "$jar.part" \
+      "https://repo1.maven.org/maven2/org/bouncycastle/$art/$ver/$art-$ver.jar"
+    mv "$jar.part" "$jar"
+    echo "  $art-$ver $(du -h "$jar" | cut -f1)"
+  fi
+}
+fetch_bc bc-fips "${BCFIPS:-2.1.3}"
+fetch_bc bcpkix-fips "${BCPKIX:-2.1.12}"
+
 echo "== restarting Kafka Connect"
-docker compose -f source/docker-compose.yml up -d connect   # picks up the new mounts
+docker compose -f source/docker-compose.yml restart connect
 
 echo "== waiting for the REST API"
 for i in $(seq 1 40); do
