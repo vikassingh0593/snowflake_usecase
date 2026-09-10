@@ -1,5 +1,10 @@
 version: 2
 
+# Generic-test arguments are nested under `arguments:`. dbt 1.12 accepts the
+# old top-level form with a deprecation warning and dbt 2.0 removes it, so the
+# old shape is a CI failure waiting for a version bump nobody chose. Most
+# tutorials still show the old form.
+
 seeds:
   - name: category_hierarchy
     description: >
@@ -21,12 +26,14 @@ seeds:
         tests:
           - not_null
           - accepted_values:
-              values: ["Grocery", "Fresh", "Beverages", "Household"]
+              arguments:
+                values: ["Grocery", "Fresh", "Beverages", "Household"]
       - name: pick_priority
         tests:
           - accepted_values:
-              values: [1, 2, 3]
-              quote: false
+              arguments:
+                values: [1, 2, 3]
+                quote: false
 
   - name: sla_threshold
     description: >
@@ -50,7 +57,8 @@ seeds:
       - name: daypart
         tests:
           - accepted_values:
-              values: ["MORNING", "MIDDAY", "EVENING", "NIGHT"]
+              arguments:
+                values: ["MORNING", "MIDDAY", "EVENING", "NIGHT"]
       - name: promise_minutes
         tests: [not_null]
     # The test this table really wants is uniqueness on (store_code, daypart),
@@ -90,5 +98,6 @@ seeds:
         tests:
           - not_null
           - relationships:
-              to: ref('complaint_reason_code')
-              field: reason_code
+              arguments:
+                to: ref('complaint_reason_code')
+                field: reason_code
