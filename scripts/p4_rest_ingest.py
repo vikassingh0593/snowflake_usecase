@@ -23,8 +23,6 @@ import subprocess
 import sys
 import time
 
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
 from snowflake.ingest import SimpleIngestManager, StagedFile
 
 ACCOUNT = "AWTTGVH-OLB61128"
@@ -40,16 +38,16 @@ KEYFILE = os.environ.get("KEYFILE", os.path.join(ROOT, "rsa_kafka.p8"))
 FILES = os.path.join(ROOT, "source", "out", "clickstream", "*.ndjson.gz")
 
 
-def private_key_der() -> bytes:
-    """The REST client signs a JWT, so it needs the key as DER, not PEM text."""
-    with open(KEYFILE, "rb") as fh:
-        key = serialization.load_pem_private_key(fh.read(), password=None,
-                                                 backend=default_backend())
-    return key.private_bytes(
-        encoding=serialization.Encoding.DER,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
+def private_key_pem() -> str:
+    """PEM text, not DER bytes.
+
+    snowflake-ingest 1.0.x calls private_key.encode() before parsing it, so it
+    wants a str holding the PEM. Passing DER bytes fails with
+    "'bytes' object has no attribute 'encode'". Earlier releases took DER, which
+    is why most examples still show it.
+    """
+    with open(KEYFILE) as fh:
+        return fh.read()
 
 
 def put_files(paths: list[str]) -> None:
@@ -77,7 +75,7 @@ def main() -> int:
         return 1
 
     mgr = SimpleIngestManager(account=ACCOUNT, host=HOST, user=USER,
-                              pipe=PIPE, private_key=private_key_der())
+                              pipe=PIPE, private_key=private_key_pem())
 
     if args.report:
         print(mgr.get_history())
