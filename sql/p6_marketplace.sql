@@ -139,14 +139,17 @@ FROM   RAW.V_FX_INR_USD;
 --
 --   1. FX publishes on business days and orders do not. An equi-join silently
 --      drops every weekend -- two days in seven, gone, with no error.
---   2. The free tier's history ends well before our order window. An equi-join
---      returns ZERO rows for that and looks exactly like a broken join.
+--   2. The free tier's history ends before our order window. Measured on
+--      2026-09-10: rates run 1973-01-02 to 2026-06-11, a 91-day lag, so an
+--      equi-join returns ZERO rows and looks exactly like a broken join.
 --
 -- ASOF handles both the same way: carry the last published rate forward. The
--- RATE_TAKEN_FROM column is the point -- it shows how stale the rate being
--- applied is, so a year-old rate is visible in the output rather than
--- indistinguishable from a fresh one. Silently dropping the rows would have
--- hidden the staleness; this surfaces it.
+-- RATE_TAKEN_FROM column is the point -- it shows how stale the applied rate
+-- is. Every row in the order window comes back stamped 2026-06-11, which says
+-- plainly that the USD figure is not a conversion but "what these orders would
+-- be worth at June's rate". An equi-join would have returned nothing and said
+-- nothing. That is the honest limit of a free listing, and the reason the
+-- currency here is a demonstration rather than a number anyone should bank.
 WITH daily AS (
   SELECT TO_DATE(PLACED_TS)      AS ORDER_DATE,
          COUNT(*)                AS ORDERS,
@@ -171,9 +174,20 @@ LIMIT  10;
 -- the pair the other way round and the view needs BASE and QUOTE swapped.
 
 -- Storage this account is billed for, on account of the share: none.
-SELECT COUNT(*) AS local_tables_created_by_mechanism_12
+--
+-- TABLE_TYPE = 'BASE TABLE' is not decoration. INFORMATION_SCHEMA.TABLES lists
+-- views too, and V_FX_INR_USD matches '%FX%', so the unfiltered count returns 1
+-- -- it counts the very object that proves nothing was copied, and reads like a
+-- failure. Show what was found before asserting a number about it.
+SELECT TABLE_NAME, TABLE_TYPE, ROW_COUNT, BYTES
 FROM   QCOMMERCE.INFORMATION_SCHEMA.TABLES
-WHERE  TABLE_SCHEMA = 'RAW' AND TABLE_NAME LIKE '%FX%';   -- expect 0
+WHERE  TABLE_SCHEMA = 'RAW' AND TABLE_NAME LIKE '%FX%';
+
+SELECT COUNT(*) AS local_base_tables_from_mechanism_12
+FROM   QCOMMERCE.INFORMATION_SCHEMA.TABLES
+WHERE  TABLE_SCHEMA = 'RAW'
+  AND  TABLE_NAME LIKE '%FX%'
+  AND  TABLE_TYPE = 'BASE TABLE';   -- expect 0
 
 -- =============================================================================
 -- TEARDOWN

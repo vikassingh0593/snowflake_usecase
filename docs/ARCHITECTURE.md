@@ -448,7 +448,7 @@ SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')
 `LIST @STG_LANDING` returns zero rows. That is the success case: an empty
 container listed without an authorisation error proves the credential works.
 
-### Ingestion as built — 9 of 14
+### Ingestion as built — 12 of 14
 
 | # | Target | Rows | Note |
 |---|---|---|---|
@@ -461,10 +461,20 @@ container listed without an authorisation error proves the credential works.
 | 7 | same table | +1 column | `COUPON_CODE` added by the v2 load |
 | 8 | `RAW.EXT_SETTLEMENT` | 2,800 | external table, 7 daily files, partitioned on the filename date. Not stored |
 | 9 | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | `ICEBERG_VERSION = 3` at create; 625 rows deleted into a deletion vector |
+| 12 | `RAW.V_FX_INR_USD` | 15,683 | a VIEW over share `MARKETPLACE_PUBLIC_DATA_FREE`. Zero bytes local |
+| 13 | `RAW.DIM_STORE_SEED` | 8 | `write_pandas`, `auto_create_table`, types from the dtypes |
+| 14 | 4 seed tables | 125 | `dbt build`, `PASS=19 ERROR=0` |
 | - | `RAW.ORDER_BADFILE_TEST` | 200 | 203 parsed, 3 rejected, all three named by `VALIDATE()` |
 
-**376,375 rows stored**, plus 2,800 queried in place. `CORE`, `MART`, `SERVE`
-and `LAB` are empty.
+**376,508 rows stored**, plus 2,800 queried in place and 15,683 read live from a
+share. `CORE`, `MART`, `SERVE` and `LAB` are empty.
+
+Mechanism 12's listing is `FINANCE__ECONOMICS`, schema **`PUBLIC_DATA_FREE`** —
+the Cybersyn rebrand moved it from `CYBERSYN`; table and column names were
+unchanged. Its free tier stops at 2026-06-11, a 91-day lag, which is why the
+join is `ASOF` rather than an equi-join: the applied rate's date is a column
+instead of a silently empty result. Shared tables report `ROW_COUNT` and `BYTES`
+as NULL, so a shared table cannot be sized before it is queried.
 
 Both streaming mechanisms created a pipe implicitly behind the target table
 (`ORDER_STATUS_KAFKA_V4-STREAMING`, `ORDER_STATUS_SDK-STREAMING`) without either
@@ -490,9 +500,14 @@ being declared, which is what gives per-mechanism credit attribution through
   -> Admin -> Cost Management -> Budgets, 80 credits.
 - **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
   catches up (~3 h). 3.78 credits predates Parts 3-5 entirely.
-- **Mechanisms 10-14** - directory table, external network access, Marketplace
-  share, `write_pandas`, dbt seeds. 13 needs a native arm64 interpreter, which
-  Part 9 needs too.
+- **Mechanisms 10 and 11** - directory table over complaint PDFs, and external
+  network access to Open-Meteo. Both blocked on the same gate: the Anaconda
+  Terms of Service are not accepted, so `CREATE FUNCTION ... PACKAGES=('pypdf')`
+  and `('requests')` fail outright. ORGADMIN, Snowsight -> Admin -> Billing &
+  Terms -> Anaconda -> Enable.
+- **A native arm64 interpreter.** Mechanisms 13 and 14 sidestepped it by running
+  in containers, as mechanism 2 did. Part 9 cannot: Snowpark and
+  `snowflake-ml-python` want to be on the Mac itself.
 - **Everything downstream of `RAW`.** Parts 6-17.
 
 ---

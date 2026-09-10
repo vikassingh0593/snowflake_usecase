@@ -192,6 +192,53 @@ merged at O(log n) on every read, v3 writes a bitmap applied at O(1) per row.
 
 ---
 
+### Part 6 — mechanisms 12, 13 and 14 done
+
+| # | Mechanism | Result |
+|---|---|---|
+| 14 | dbt seeds | 4 seeds, 125 rows, 14 tests, `PASS=19 ERROR=0` |
+| 13 | `write_pandas` | `RAW.DIM_STORE_SEED`, 8 rows, table created from the dtypes |
+| 12 | Marketplace share | `FINANCE__ECONOMICS` mounted, 15,683 rate days, **0 bytes copied** |
+
+**A seed is ingestion, not transformation.** dbt appears twice in this project
+and only its second appearance is modelling. `dbt build` reported *"Found 4
+seeds, 1 operation, 14 data tests"* and no models, because none exist. The seed
+is the source: nothing upstream knows what a T1 store's evening promise is, so
+that fact enters the platform from git and nowhere else.
+
+**Marketplace: the free tier lags 91 days.** Rates run 1973-01-02 to
+2026-06-11 against an order window ending 2026-09-10, so every order in the
+window is converted at June's rate. `ASOF JOIN` is what makes that legible --
+`RATE_TAKEN_FROM` comes back `2026-06-11` on every row. An equi-join would have
+returned zero rows and been indistinguishable from a broken join. The USD column
+is therefore a demonstration, not a number to bank.
+
+**Shared tables report `ROW_COUNT` and `BYTES` as NULL**, not as the provider's
+figures. There is no way to size a shared table before querying it, which turns
+"never `SELECT *` on a share" from advice into the only rule available. A `LIMIT`
+with no `ORDER BY` is the safe probe -- it stops after one micro-partition
+however large the table is.
+
+### Six traps in this part
+
+| Trap | What happened |
+|---|---|
+| `auto_create_table` quotes identifiers exactly as given | A lower-case pandas frame produces a quoted lower-case table that no unquoted SQL can reach. Upper-casing the frame first is the whole fix -- and `dbt_project.yml` needs `+quote_columns: false` for the same reason |
+| Key format flips between clients | `snowflake-ingest` 1.0.x wants a PEM string; `snowflake-connector-python` wants DER bytes. Same key pair, same account |
+| zsh `%` in a copied public key | `tr -d '\n'` prints no trailing newline, so zsh appends `%` to mark it. Copied in, the key is 393 chars and no longer valid base64. Pipe to `pbcopy` |
+| Cybersyn rebrand moved the schema | Tables are under `PUBLIC_DATA_FREE`, not `CYBERSYN`. The table and column names were unchanged |
+| `INFORMATION_SCHEMA.TABLES` includes views | The zero-copy assertion counted `V_FX_INR_USD` and returned 1 -- it counted the object proving nothing was copied. Needs `TABLE_TYPE = 'BASE TABLE'` |
+| `python:3.12-slim` has no git | `dbt debug` checks for it unconditionally because `dbt deps` clones packages. Harmless with no packages, fatal once Part 6 adds `dbt_utils` |
+
+Type inference is worth watching in both directions. `write_pandas` gave every
+string `VARCHAR(16777216)` -- a pandas `object` dtype carries no length, so the
+connector takes the maximum -- and typed `PINCODE` as `NUMBER(38,0)`, which is
+wrong for an identifier and only harmless because no Indian pincode starts with
+zero. dbt seeds declare `column_types` explicitly and get `varchar(8)`. Same
+class of data, two mechanisms, two levels of care.
+
+---
+
 ## Resume here
 
 ### 1. Bring the source stack back up
@@ -217,35 +264,21 @@ The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
 (`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
 rather than by `SHOW`.
 
-### 3. Then: mechanisms 10-14 — written, not yet run
+### 3. Then: mechanisms 10 and 11
 
-All five are authored. Nothing below has touched the account: the agent
-container is 403 for `*.snowflakecomputing.com` and `management.azure.com`, so
-every one of these is authored here and executed by you.
+Both are written. Both wait on the same gate.
 
-Run order is forced in one place only: **13 before 11**, because the weather
-UDF reads store coordinates from `RAW.DIM_STORE_SEED` and nothing else has
-loaded a store dimension. The rest is free.
+| Gate | Fix |
+|---|---|
+| **Anaconda terms not accepted** | Snowsight -> Admin -> Billing & Terms -> Anaconda -> Enable, as ORGADMIN. `pypdf` and `requests` are third-party packages, so `CREATE FUNCTION ... PACKAGES=` fails outright. STEP 0 of `sql/p6_directory_docs.sql` returns zero rows until it is done |
 
-| Order | # | Run | Where |
-|---|---|---|---|
-| 1 | 12 | Snowsight -> Marketplace -> Get, then `sql/p6_marketplace.sql` | UI, then `snow sql` |
-| 2 | 10 | `scripts/p6_complaints.sh`, then `sql/p6_directory_docs.sql` | Cloud Shell, then `snow sql` |
-| 3 | 13 | `scripts/p6_pandas_run.sh` | Docker, on the Mac |
-| 4 | 11 | `sql/p6_external_access.sql` | `snow sql` |
-| 5 | 14 | `scripts/p6_dbt_run.sh` | Docker, on the Mac |
-
-Two prerequisites gate the set, and both are one-time:
-
-| Gate | Blocks | Fix |
+| # | Run | Where |
 |---|---|---|
-| **Anaconda terms not accepted** | 10 and 11 — `pypdf` and `requests` are third-party packages, so `CREATE FUNCTION ... PACKAGES=` fails outright | Snowsight -> Admin -> Billing & Terms -> Anaconda -> Enable, as ORGADMIN. STEP 0 of `sql/p6_directory_docs.sql` returns zero rows until it is done |
-| **`SVC_CI` has no key pair** | 14 — dbt runs as `SVC_CI`/`QC_ENGINEER`, and `TYPE = SERVICE` cannot use a password | `openssl` as in the header of `scripts/p6_dbt_run.sh`, then one `ALTER USER SVC_CI SET RSA_PUBLIC_KEY` |
+| 10 | `scripts/p6_complaints.sh`, then `sql/p6_directory_docs.sql` | Cloud Shell, then `snow sql` |
+| 11 | `sql/p6_external_access.sql` | `snow sql` |
 
-Three of the five run in containers (`p3_sdk_run.sh`, `p6_pandas_run.sh`,
-`p6_dbt_run.sh`). That is now the pattern rather than an exception, and the
-native arm64 interpreter is still worth installing before Part 9 — Snowpark
-and `snowflake-ml-python` want to be on the Mac itself.
+11 reads coordinates from `RAW.DIM_STORE_SEED`, which mechanism 13 has now
+loaded, so the ordering constraint is satisfied.
 
 ### Row counts as they stand
 
@@ -259,8 +292,14 @@ and `snowflake-ml-python` want to be on the Mac itself.
 | `RAW.ORDER_BACKFILL` | 40,000 | 6, 7 |
 | `RAW.ORDER_BADFILE_TEST` | 200 | 6 |
 | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | 9 |
-| | **376,375 stored** | |
+| `RAW.DIM_STORE_SEED` | 8 | 13 |
+| `RAW.CATEGORY_HIERARCHY` | 23 | 14 |
+| `RAW.SLA_THRESHOLD` | 32 | 14 |
+| `RAW.COMPLAINT_REASON_CODE` | 10 | 14 |
+| `RAW.COMPLAINT_LABEL` | 60 | 14 |
+| | **376,508 stored** | |
 | `RAW.EXT_SETTLEMENT` | 2,800 | 8 - read in place, not stored |
+| `RAW.V_FX_INR_USD` | 15,683 | 12 - a view over a share, nothing copied |
 
 `CORE`, `MART`, `SERVE` and `LAB` are empty. Nothing has been deduped: the three
 order-status tables hold the same 79,663 events three times over by design, and

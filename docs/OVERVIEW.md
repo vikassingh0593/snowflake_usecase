@@ -169,7 +169,7 @@ did.
 | **Source systems** | ✅ Done | The operational database, its live change feed, and the app event stream are running and producing data |
 | **Cloud storage and access** | ✅ **Done** | File storage created in the same region as the platform, with four separate areas for arriving files, archives, partner data and documents. The platform has been granted least-privilege access to each: it can write only to the archive, and read the rest |
 | Platform foundation | ✅ Done | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
-| Data arrival | 🟡 In progress | **9 of 14 routes live.** The same 79,663 app events now reach the platform three different ways — through a message broker in two different modes, and directly with no broker at all — so the cost and speed of each can be compared on identical data. Files now also arrive automatically when a partner drops them, on request, and as bulk historical backfills — including one that gained a new column mid-load and was absorbed without anyone changing a table definition. A logistics partner's files are read where they sit without being copied at all, and an open-format archive has been written that other tools can read without going through this platform |
+| Data arrival | 🟡 In progress | **12 of 14 routes live.** The same 79,663 app events reach the platform three different ways, so the cost and speed of each can be compared on identical data. Files arrive automatically when a partner drops them, on request, and as bulk backfills — including one that gained a new column mid-load and was absorbed without anyone changing a table definition. A logistics partner's files are read where they sit without being copied. An open-format archive has been written that other tools can read without going through this platform. Reference data now arrives from a spreadsheet-shaped dataframe and from version-controlled business constants. And one dataset is used without being ingested at all — read live from its publisher, with not one byte stored here |
 | Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
 | Risk prediction | ⬜ | Training and deploying the late-delivery model |
 | Forecasting and text analysis | ⬜ | Demand forecast, anomaly detection, complaint analysis |
@@ -181,27 +181,37 @@ did.
 
 ### Where things stand, in one sentence
 
-**Nine of the fourteen arrival routes are live, and nothing has moved past the
-landing zone.** 376,375 records are now inside the platform, sitting exactly as
-they arrived. Turning them into the business's own vocabulary is the next stage,
-and none of it has started.
+**Twelve of the fourteen arrival routes are live, and nothing has moved past the
+landing zone.** 376,508 records sit inside the platform exactly as they arrived.
+Turning them into the business's own vocabulary is the next stage and none of it
+has started.
 
 | | |
 |---|---|
-| Records inside the analytics platform | **376,375** |
+| Records inside the analytics platform | **376,508** |
 | Read where they sit, never copied | 2,800 |
-| Arrival routes connected | **9 of 14** |
+| Used live from a publisher, never stored | 15,683 |
+| Arrival routes connected | **12 of 14** |
 | Records cleaned, modelled or served | **0** |
 | Cloud spend confirmed | 3.78 of ~200 credits |
 
-The same 79,663 app events now arrive three separate ways, which is deliberate:
-identical input through three different mechanisms is the only way to compare
-their cost and speed honestly. Removing those duplicates is the first job of the
-cleaning stage, not of arrival.
+The same 79,663 app events arrive three separate ways on purpose: identical
+input through three mechanisms is the only honest way to compare their cost and
+speed. Removing those duplicates is the first job of the cleaning stage, not of
+arrival.
 
-**What has not been done is as important as what has.** There is still no
-spending alert covering the continuous-loading services — the existing cap only
-sees the query engine. Nine routes have now run without it.
+**One route is worth singling out.** A public financial dataset is now queried
+directly from its publisher's storage — nothing copied, nothing scheduled,
+nothing to go stale. What it costs instead is a dependency: if the publisher
+withdraws access, every query through it fails at once with no local copy to
+fall back on. It also showed the honest limit of free data — the published rates
+stop three months short of today, so the platform reports the most recent rate
+available and says which day it came from, rather than quietly returning
+nothing.
+
+**What has not been done still matters more than what has.** There is still no
+spending alert covering the continuous-loading services; the existing cap only
+sees the query engine. Twelve routes have now run without it.
 
 ---
 
