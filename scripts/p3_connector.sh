@@ -41,12 +41,12 @@ echo
 # Do not guess the class name. v4 is a rewrite and may not use the v3 class.
 # Connect reports exactly what it loaded, which is the authoritative answer.
 echo "== sink connector classes Connect can see"
-curl -s localhost:8083/connector-plugins \
-  | python3 -c '
-import json,sys
+curl -s localhost:8083/connector-plugins | python3 -c '
+import json, sys
 for p in json.load(sys.stdin):
-    if p.get("type") == "sink" or "snowflake" in p.get("class","").lower():
-        print(f"  {p[\"class\"]}   type={p.get(\"type\")}  version={p.get(\"version\")}")
+    cls = p.get("class", "")
+    if p.get("type") == "sink" or "snowflake" in cls.lower():
+        print("  " + cls + "   type=" + str(p.get("type")) + "  version=" + str(p.get("version")))
 '
 cat <<'EOF'
 
