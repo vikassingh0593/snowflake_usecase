@@ -448,16 +448,52 @@ SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')
 `LIST @STG_LANDING` returns zero rows. That is the success case: an empty
 container listed without an authorisation error proves the credential works.
 
+### Ingestion as built — 9 of 14
+
+| # | Target | Rows | Note |
+|---|---|---|---|
+| 1 | `RAW.ORDER_STATUS_KAFKA_V4` | 79,663 | v4.1.0, `SnowflakeStreamingSinkConnector`, `tasks.max = 3` |
+| 2 | `RAW.ORDER_STATUS_SDK` | 79,663 | `snowpipe-streaming` 1.8.0, one channel, offset token |
+| 3 | `RAW.ORDER_STATUS_KAFKA_V3FILE` | 79,663 | v3.5.4 in a separate plugin dir |
+| 4 | `RAW.CLICKSTREAM_AUTO` | 10,051 | Event Grid -> queue -> pipe, 5 files |
+| 5 | `RAW.CLICKSTREAM_REST` | 8,097 | `insertFiles` on an internal stage, 4 files |
+| 6 | `RAW.ORDER_BACKFILL` | 40,000 | `INFER_SCHEMA` + `MATCH_BY_COLUMN_NAME` |
+| 7 | same table | +1 column | `COUPON_CODE` added by the v2 load |
+| 8 | `RAW.EXT_SETTLEMENT` | 2,800 | external table, 7 daily files, partitioned on the filename date. Not stored |
+| 9 | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | `ICEBERG_VERSION = 3` at create; 625 rows deleted into a deletion vector |
+| - | `RAW.ORDER_BADFILE_TEST` | 200 | 203 parsed, 3 rejected, all three named by `VALIDATE()` |
+
+**376,375 rows stored**, plus 2,800 queried in place. `CORE`, `MART`, `SERVE`
+and `LAB` are empty.
+
+Both streaming mechanisms created a pipe implicitly behind the target table
+(`ORDER_STATUS_KAFKA_V4-STREAMING`, `ORDER_STATUS_SDK-STREAMING`) without either
+being declared, which is what gives per-mechanism credit attribution through
+`PIPE_USAGE_HISTORY` for free.
+
+### Deltas from the design, Parts 3-5
+
+| Designed | As built | Why |
+|---|---|---|
+| v4 as shipped | `bc-fips 2.1.3` + `bcpkix-fips 2.1.12` added to the v4 plugin dir | v4 does not bundle BouncyCastle FIPS; v3 does. Without them key-pair auth fails at registration with HTTP 500 |
+| v4 compatibility validator on | `snowflake.streaming.validate.compatibility.with.classic = false` | It demands v3 naming and then v3-style client-side validation. Table names here are explicit and schematization is off, so it guarded nothing while costing server-side validation |
+| Schematization default | Forced `false` on both connectors | v4 flipped the default to `true`; v3 defaults `false`. Explicit on both, or the two mechanisms are not comparable |
+| `VALIDATION_MODE` on the backfill | Moved to a genuinely malformed file | Mutually exclusive with `MATCH_BY_COLUMN_NAME` - Snowflake treats the column match as a transform |
+| Compose as written | Named volumes `pgdata`, `rpdata` | `docker compose down -v` destroyed a hand-produced topic with no way to re-snapshot it |
+
 ### Not yet done
 
-- **Account budget** — the only control covering serverless spend. `RM_POC` sees
-  virtual-warehouse credits only, and Snowpipe, Snowpipe Streaming, dynamic table
-  refresh and search optimization are all invisible to it. Set in Snowsight →
-  Admin → Cost Management → Budgets, 80 credits.
-- **Service user keys** — `SVC_KAFKA` and `SVC_CI` exist with `TYPE = SERVICE` and
-  no `RSA_PUBLIC_KEY`. Browser auth cannot work for a headless connector, so both
-  need a key pair before Part 3.
-- **All 14 ingestion mechanisms.** Zero rows in `RAW`.
+- **Account budget** - still the only control covering serverless spend, and
+  still not set. `RM_POC` sees virtual-warehouse credits only; Snowpipe,
+  Snowpipe Streaming, dynamic table refresh and search optimization are all
+  invisible to it. Nine ingestion mechanisms have now run without it. Snowsight
+  -> Admin -> Cost Management -> Budgets, 80 credits.
+- **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
+  catches up (~3 h). 3.78 credits predates Parts 3-5 entirely.
+- **Mechanisms 10-14** - directory table, external network access, Marketplace
+  share, `write_pandas`, dbt seeds. 13 needs a native arm64 interpreter, which
+  Part 9 needs too.
+- **Everything downstream of `RAW`.** Parts 6-17.
 
 ---
 

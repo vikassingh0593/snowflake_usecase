@@ -181,21 +181,27 @@ did.
 
 ### Where things stand, in one sentence
 
-**Both ends are built; nothing has crossed between them yet.** The operational
-system is producing data and the analytics platform is ready to receive it, and the
-layer that carries data from one to the other is the entire next stage.
+**Nine of the fourteen arrival routes are live, and nothing has moved past the
+landing zone.** 376,375 records are now inside the platform, sitting exactly as
+they arrived. Turning them into the business's own vocabulary is the next stage,
+and none of it has started.
 
 | | |
 |---|---|
-| Records waiting in the source system | 170,343 |
-| App events waiting in the stream | 79,663 |
-| Records inside the analytics platform | **0** |
-| Arrival routes connected | **0 of 14** |
-| Cloud spend so far | 3.78 of ~200 credits |
+| Records inside the analytics platform | **376,375** |
+| Read where they sit, never copied | 2,800 |
+| Arrival routes connected | **9 of 14** |
+| Records cleaned, modelled or served | **0** |
+| Cloud spend confirmed | 3.78 of ~200 credits |
 
-Nothing has been wasted in that: the foundation is the part that cannot be
-rushed later, and every access grant, spending control and storage permission is
-now verified rather than assumed.
+The same 79,663 app events now arrive three separate ways, which is deliberate:
+identical input through three different mechanisms is the only way to compare
+their cost and speed honestly. Removing those duplicates is the first job of the
+cleaning stage, not of arrival.
+
+**What has not been done is as important as what has.** There is still no
+spending alert covering the continuous-loading services — the existing cap only
+sees the query engine. Nine routes have now run without it.
 
 ---
 

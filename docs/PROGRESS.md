@@ -203,38 +203,55 @@ docker exec -i qc-redpanda rpk topic list
 curl -s localhost:8083/connectors/qc-postgres-cdc/status | python3 -m json.tool
 ```
 
-Console at http://localhost:8081.
+Console at http://localhost:8081. Only needed for routes that read Kafka.
+Mechanisms 10-14 do not touch the source stack at all.
 
-### 2. Three things left from the foundation
+### 2. Two things still open
 
 | | |
 |---|---|
-| **Account budget** | Snowsight → Admin → Cost Management → Budgets → Account Budget → 80 credits + email. The only control that sees Snowpipe spend |
-| **Service user keys** | `SVC_KAFKA` and `SVC_CI` have no `RSA_PUBLIC_KEY`. The Kafka connector has no browser, so key-pair is the only option |
-| **Enterprise confirmation** | `CREATE MASKING POLICY` in a throwaway database, then drop it |
+| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Nine ingestion mechanisms have now run against an account with no serverless cap at all |
+| **Credits backfill** | `sql/p3_credits_backfill.sql`, once `ACCOUNT_USAGE` has caught up. The ~3 h latency means Part 3-5 spend is still unmeasured. 3.78 credits is the last verified figure and it predates all of it |
 
-Key generation, when you get to it:
+The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
+(`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
+rather than by `SHOW`.
 
-```bash
-openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_kafka.p8 -nocrypt
-openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
-chmod 600 rsa_kafka.p8
-grep -v "^-----" rsa_kafka.pub | tr -d '\n'      # paste into ALTER USER
-```
+### 3. Then: mechanisms 10-14
 
-`rsa_key*` and `*.p8` are gitignored. Never commit or paste a private key.
+Nine of fourteen are in. The five left share no infrastructure with what is
+already built, so the order is free:
 
-### 3. Then: ingestion
+| # | Mechanism | What it needs |
+|---|---|---|
+| 10 | Directory table over complaint PDFs | files in the `docs/` container, `PARSE_DOCUMENT` off the directory table |
+| 11 | External network access to Open-Meteo | network rule + external access integration + secret. `api.open-meteo.com` is 403 from the agent container, so the call has to originate in Snowflake |
+| 12 | Marketplace share | Snowsight -> Data Products -> Marketplace, one free dataset. Zero-copy: no ingestion in the ingestion |
+| 13 | `write_pandas` | native arm64 Python. The current interpreter is an Intel pyenv build running under Rosetta |
+| 14 | dbt seeds | category hierarchy, SLA thresholds, complaints CSV |
 
-Fourteen mechanisms, none built. Start with the three that share one source, so
-the latency and credit comparison holds inputs constant:
+**13 is the gating one.** Snowpark and `snowflake-ml-python` in Part 9 need the
+same native arm64 interpreter, and `cryptography` 50.x ships arm64-only macOS
+wheels. Install the python.org universal2 build before either.
 
-1. Kafka Connector v4 on Snowpipe Streaming
-2. Snowpipe Streaming SDK, direct, no Kafka
-3. Kafka connector in Snowpipe file mode
+### Row counts as they stand
 
-The connector jar goes in `source/connectors/plugins/`, which is already mounted
-writable into the Connect container.
+| Target | Rows | Mechanism |
+|---|---|---|
+| `RAW.ORDER_STATUS_KAFKA_V4` | 79,663 | 1 |
+| `RAW.ORDER_STATUS_SDK` | 79,663 | 2 |
+| `RAW.ORDER_STATUS_KAFKA_V3FILE` | 79,663 | 3 |
+| `RAW.CLICKSTREAM_AUTO` | 10,051 | 4 |
+| `RAW.CLICKSTREAM_REST` | 8,097 | 5 |
+| `RAW.ORDER_BACKFILL` | 40,000 | 6, 7 |
+| `RAW.ORDER_BADFILE_TEST` | 200 | 6 |
+| `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | 9 |
+| | **376,375 stored** | |
+| `RAW.EXT_SETTLEMENT` | 2,800 | 8 - read in place, not stored |
+
+`CORE`, `MART`, `SERVE` and `LAB` are empty. Nothing has been deduped: the three
+order-status tables hold the same 79,663 events three times over by design, and
+resolving that is what `CORE` is for.
 
 ---
 
