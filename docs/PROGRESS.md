@@ -172,6 +172,26 @@ that pipe rather than set false.
 
 ---
 
+### Part 5 in progress — mechanisms 8 and 9 done
+
+| # | Mechanism | Result |
+|---|---|---|
+| 8 | External table + insert-only stream | 2,800 settlement rows queried in place, 7 daily files, partitioned on the filename date |
+| 9 | **Iceberg v3**, Snowflake-managed on `EXVOL_QC` | 79,663 rows written to Azure, 625 deleted into a deletion vector, 79,038 remain |
+
+`SHOW ICEBERG TABLES` reports `iceberg_table_format_version = 3` and the
+metadata sits at
+`archive/order_events.n8eaHZIc/metadata/00002-*.metadata.json` — readable by
+any Iceberg engine with Snowflake uninvolved, which is the whole argument for
+the format over a normal table.
+
+`ICEBERG_VERSION = 3` was set at creation rather than upgrading from v2: the
+upgrade is irreversible and v2 readers cannot read v3. The `DELETE` is what
+produces the deletion vector — v2 would have written positional delete files
+merged at O(log n) on every read, v3 writes a bitmap applied at O(1) per row.
+
+---
+
 ## Resume here
 
 ### 1. Bring the source stack back up
