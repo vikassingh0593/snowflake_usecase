@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 from snowflake.ingest.streaming import StreamingIngestClient
 
 ACCOUNT = "AWTTGVH-OLB61128"
+HOST = "awttgvh-olb61128.snowflakecomputing.com"
 USER = "SVC_KAFKA"
 ROLE = "QC_LOADER"
 DB, SCHEMA, TABLE = "QCOMMERCE", "RAW", "ORDER_STATUS_SDK"
@@ -48,9 +49,26 @@ BATCH = 5_000
 
 
 def properties() -> dict:
+    """Connection properties for the SDK's Rust core.
+
+    host, scheme and port are explicit. The core logs "No account URL provided.
+    Constructing from scheme, host, and port" and then fails on an empty host --
+    it does not derive one from the account identifier the way the Python
+    connector does. The accepted keys are account, account_url, host, scheme,
+    port, user, role, private_key, authorization_type, jwt, oauth and token.
+    """
     with open(KEYFILE) as fh:
         key = fh.read()
-    return {"account": ACCOUNT, "user": USER, "role": ROLE, "private_key": key}
+    return {
+        "account": ACCOUNT,
+        "host": HOST,
+        "scheme": "https",
+        "port": 443,
+        "user": USER,
+        "role": ROLE,
+        "private_key": key,
+        "authorization_type": "jwt",
+    }
 
 
 def main() -> int:
