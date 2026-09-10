@@ -18,6 +18,11 @@
 --   Get -> database name FINANCE__ECONOMICS
 --       -> grant query access to QC_ENGINEER and QC_ANALYST
 --
+-- As acquired on 2026-09-10:
+--   share    MARKETPLACE_PUBLIC_DATA_FREE
+--   provider HFB60520.SNOWFLAKE_MANAGED$PUBLIC_AWS_US_WEST_2
+--   schema   PUBLIC_DATA_FREE   -- NOT CYBERSYN. The rebrand moved it.
+--
 -- Any free listing exercises the same mechanism. This one is the pick because
 -- it carries FX rates, and every amount in this platform is whole paise -- so
 -- reporting an INR figure in USD is a real join rather than a token one.
@@ -55,8 +60,12 @@ WHERE  "origin" <> '';       -- non-empty origin = came from a share
 -- =============================================================================
 -- STEP 2 — what is in it.
 --
--- ROW_COUNT and BYTES here are the PROVIDER's, not yours. A billion-row table
--- costs you nothing to hold and everything to scan carelessly.
+-- ROW_COUNT and BYTES come back NULL, not as the provider's figures. Shared
+-- tables expose no size metadata at all, which is a harder constraint than it
+-- first looks: you cannot estimate what a query will scan before running it.
+-- "Never SELECT * on a share" stops being advice and becomes the only rule
+-- available. A LIMIT with no ORDER BY is the safe probe -- it short-circuits
+-- after one micro-partition however large the table is.
 -- =============================================================================
 SELECT TABLE_SCHEMA, TABLE_NAME, ROW_COUNT, BYTES
 FROM   FINANCE__ECONOMICS.INFORMATION_SCHEMA.TABLES
@@ -65,17 +74,31 @@ ORDER  BY ROW_COUNT DESC NULLS LAST
 LIMIT  20;
 
 -- =============================================================================
--- STEP 3 — one narrow, dated slice. Never SELECT * on a shared table.
+-- STEP 3 — does the pair exist, and how far does the free tier actually go?
 --
--- If STEP 2 shows a different table name, this is the one line to change.
+-- Asked as a coverage question rather than a dated slice. A free listing is a
+-- sample of a paid one, and the sample is usually truncated in time -- so a
+-- BETWEEN over our order window can return zero rows while the table is
+-- perfectly healthy. Zero rows from a filter and zero rows from an empty table
+-- look identical; MIN and MAX tell them apart.
 -- =============================================================================
-SELECT *
-FROM   FINANCE__ECONOMICS.CYBERSYN.FX_RATES_TIMESERIES
+SELECT BASE_CURRENCY_ID,
+       QUOTE_CURRENCY_ID,
+       COUNT(*)   AS n,
+       MIN(DATE)  AS from_d,
+       MAX(DATE)  AS to_d
+FROM   FINANCE__ECONOMICS.PUBLIC_DATA_FREE.FX_RATES_TIMESERIES
 WHERE  BASE_CURRENCY_ID = 'INR'
-  AND  QUOTE_CURRENCY_ID = 'USD'
-  AND  DATE BETWEEN '2026-07-11' AND '2026-09-09'
-ORDER  BY DATE DESC
+GROUP  BY 1, 2
+ORDER  BY n DESC
 LIMIT  10;
+
+-- The most recent rows for the pair, whenever they happen to be.
+SELECT DATE, BASE_CURRENCY_ID, QUOTE_CURRENCY_ID, VALUE
+FROM   FINANCE__ECONOMICS.PUBLIC_DATA_FREE.FX_RATES_TIMESERIES
+WHERE  BASE_CURRENCY_ID = 'INR' AND QUOTE_CURRENCY_ID = 'USD'
+ORDER  BY DATE DESC
+LIMIT  5;
 
 -- =============================================================================
 -- STEP 4 — a view, not a table.
@@ -96,7 +119,7 @@ SELECT DATE                          AS RATE_DATE,
        BASE_CURRENCY_ID              AS BASE_CCY,
        QUOTE_CURRENCY_ID             AS QUOTE_CCY,
        VALUE                         AS RATE
-FROM   FINANCE__ECONOMICS.CYBERSYN.FX_RATES_TIMESERIES
+FROM   FINANCE__ECONOMICS.PUBLIC_DATA_FREE.FX_RATES_TIMESERIES
 WHERE  BASE_CURRENCY_ID = 'INR'
   AND  QUOTE_CURRENCY_ID = 'USD';
 
@@ -111,10 +134,19 @@ GRANT SELECT ON VIEW RAW.V_FX_INR_USD TO ROLE QC_ENGINEER;
 SELECT COUNT(*) AS rate_days, MIN(RATE_DATE) AS from_d, MAX(RATE_DATE) AS to_d
 FROM   RAW.V_FX_INR_USD;
 
--- ASOF JOIN, not an equi-join. FX publishes on business days and orders do
--- not, so an equi-join silently drops every weekend -- roughly two days in
--- seven, gone, with no error. ASOF carries the last published rate forward,
--- which is both what finance actually does and the correct answer here.
+-- ASOF JOIN, not an equi-join. Two reasons, and the second only showed up
+-- once the share was actually mounted:
+--
+--   1. FX publishes on business days and orders do not. An equi-join silently
+--      drops every weekend -- two days in seven, gone, with no error.
+--   2. The free tier's history ends well before our order window. An equi-join
+--      returns ZERO rows for that and looks exactly like a broken join.
+--
+-- ASOF handles both the same way: carry the last published rate forward. The
+-- RATE_TAKEN_FROM column is the point -- it shows how stale the rate being
+-- applied is, so a year-old rate is visible in the output rather than
+-- indistinguishable from a fresh one. Silently dropping the rows would have
+-- hidden the staleness; this surfaces it.
 WITH daily AS (
   SELECT TO_DATE(PLACED_TS)      AS ORDER_DATE,
          COUNT(*)                AS ORDERS,
