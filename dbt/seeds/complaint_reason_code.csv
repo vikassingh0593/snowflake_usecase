@@ -1,0 +1,11 @@
+reason_code,description,owning_team,is_sla_related
+APP_ISSUE,Defect in the customer application,product,False
+DAMAGED_ITEM,Item physically damaged in transit,fulfilment,False
+LATE_DELIVERY,Delivery later than the promised time,operations,True
+MISSING_ITEM,One or more ordered items not delivered,fulfilment,False
+PACKAGING,Packaging quality or waste,supply,False
+PAYMENT_ISSUE,Incorrect or duplicate charge,finance,False
+QUALITY_FRESH,Perishable item spoiled or out of condition,supply,False
+REFUND_DELAY,Approved refund not received,finance,True
+RIDER_BEHAVIOUR,Conduct of the delivery rider,operations,False
+WRONG_ITEM,Item delivered does not match the order,fulfilment,False

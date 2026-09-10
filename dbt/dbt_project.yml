@@ -1,0 +1,27 @@
+name: qcommerce
+version: 1.0.0
+config-version: 2
+
+profile: qcommerce
+
+seed-paths: ["seeds"]
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Mechanism 14 is seeds only. Models arrive with CORE and MART in Part 6, and
+# this file is deliberately theirs to grow into rather than a throwaway.
+seeds:
+  qcommerce:
+    +schema: null          # land in the target schema (RAW), not RAW_<suffix>
+    +quote_columns: false  # unquoted -> upper case -> joinable. Same trap as write_pandas.
+    +full_refresh: true    # business constants have one current version
+    +tags: ["seed", "mechanism_14"]
+
+models:
+  qcommerce: {}
+
+on-run-start:
+  - "ALTER SESSION SET QUERY_TAG = 'p06:dbt_seeds'"

@@ -1,0 +1,94 @@
+version: 2
+
+seeds:
+  - name: category_hierarchy
+    description: >
+      Merchandising hierarchy with the two facts the platform actually needs
+      from it: shelf life and whether the item needs a cold chain. Both drive
+      pick priority, and neither is in the operational database.
+    config:
+      column_types:
+        category_l1: varchar(32)
+        category_l2: varchar(32)
+        category_l3: varchar(48)
+        shelf_life_days: number(5,0)
+        needs_cold_chain: boolean
+        pick_priority: number(1,0)
+    columns:
+      - name: category_l3
+        tests: [unique, not_null]
+      - name: category_l1
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["Grocery", "Fresh", "Beverages", "Household"]
+      - name: pick_priority
+        tests:
+          - accepted_values:
+              values: [1, 2, 3]
+              quote: false
+
+  - name: sla_threshold
+    description: >
+      The promise, per store per daypart. This is the number an SLA breach is
+      measured against, so it is versioned in git rather than typed into a
+      dashboard filter. The evening bump is a commercial decision, not a bug.
+    config:
+      column_types:
+        store_code: varchar(8)
+        city: varchar(32)
+        store_tier: varchar(2)
+        daypart: varchar(10)
+        hour_from: number(2,0)
+        hour_to: number(2,0)
+        promise_minutes: number(3,0)
+        breach_tolerance_pct: number(3,0)
+        effective_from: date
+    columns:
+      - name: store_code
+        tests: [not_null]
+      - name: daypart
+        tests:
+          - accepted_values:
+              values: ["MORNING", "MIDDAY", "EVENING", "NIGHT"]
+      - name: promise_minutes
+        tests: [not_null]
+    # The test this table really wants is uniqueness on (store_code, daypart),
+    # which needs dbt_utils. No package is installed for one test in a seeds-
+    # only project -- Part 6 adds dbt_utils when the models arrive, and this
+    # gets its test then. Stated rather than silently absent.
+
+  - name: complaint_reason_code
+    description: >
+      Complaint taxonomy. Generated alongside the PDFs by
+      source/gen_complaints.py so the corpus and the label space cannot drift.
+    config:
+      column_types:
+        reason_code: varchar(24)
+        description: varchar(128)
+        owning_team: varchar(16)
+        is_sla_related: boolean
+    columns:
+      - name: reason_code
+        tests: [unique, not_null]
+
+  - name: complaint_label
+    description: >
+      The hand-labelled fifth of the complaint corpus. This is the training
+      target for the classifier in Part 10, and the only place a complaint has
+      a label -- the PDFs themselves carry none.
+    config:
+      column_types:
+        ticket_id: varchar(16)
+        reason_code: varchar(24)
+        labelled_by: varchar(24)
+        labelled_on: date
+    columns:
+      - name: ticket_id
+        tests: [unique, not_null]
+      - name: reason_code
+        tests:
+          - not_null
+          - relationships:
+              to: ref('complaint_reason_code')
+              field: reason_code

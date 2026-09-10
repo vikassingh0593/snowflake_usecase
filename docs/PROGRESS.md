@@ -217,22 +217,35 @@ The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
 (`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
 rather than by `SHOW`.
 
-### 3. Then: mechanisms 10-14
+### 3. Then: mechanisms 10-14 — written, not yet run
 
-Nine of fourteen are in. The five left share no infrastructure with what is
-already built, so the order is free:
+All five are authored. Nothing below has touched the account: the agent
+container is 403 for `*.snowflakecomputing.com` and `management.azure.com`, so
+every one of these is authored here and executed by you.
 
-| # | Mechanism | What it needs |
+Run order is forced in one place only: **13 before 11**, because the weather
+UDF reads store coordinates from `RAW.DIM_STORE_SEED` and nothing else has
+loaded a store dimension. The rest is free.
+
+| Order | # | Run | Where |
+|---|---|---|---|
+| 1 | 12 | Snowsight -> Marketplace -> Get, then `sql/p6_marketplace.sql` | UI, then `snow sql` |
+| 2 | 10 | `scripts/p6_complaints.sh`, then `sql/p6_directory_docs.sql` | Cloud Shell, then `snow sql` |
+| 3 | 13 | `scripts/p6_pandas_run.sh` | Docker, on the Mac |
+| 4 | 11 | `sql/p6_external_access.sql` | `snow sql` |
+| 5 | 14 | `scripts/p6_dbt_run.sh` | Docker, on the Mac |
+
+Two prerequisites gate the set, and both are one-time:
+
+| Gate | Blocks | Fix |
 |---|---|---|
-| 10 | Directory table over complaint PDFs | files in the `docs/` container, `PARSE_DOCUMENT` off the directory table |
-| 11 | External network access to Open-Meteo | network rule + external access integration + secret. `api.open-meteo.com` is 403 from the agent container, so the call has to originate in Snowflake |
-| 12 | Marketplace share | Snowsight -> Data Products -> Marketplace, one free dataset. Zero-copy: no ingestion in the ingestion |
-| 13 | `write_pandas` | native arm64 Python. The current interpreter is an Intel pyenv build running under Rosetta |
-| 14 | dbt seeds | category hierarchy, SLA thresholds, complaints CSV |
+| **Anaconda terms not accepted** | 10 and 11 — `pypdf` and `requests` are third-party packages, so `CREATE FUNCTION ... PACKAGES=` fails outright | Snowsight -> Admin -> Billing & Terms -> Anaconda -> Enable, as ORGADMIN. STEP 0 of `sql/p6_directory_docs.sql` returns zero rows until it is done |
+| **`SVC_CI` has no key pair** | 14 — dbt runs as `SVC_CI`/`QC_ENGINEER`, and `TYPE = SERVICE` cannot use a password | `openssl` as in the header of `scripts/p6_dbt_run.sh`, then one `ALTER USER SVC_CI SET RSA_PUBLIC_KEY` |
 
-**13 is the gating one.** Snowpark and `snowflake-ml-python` in Part 9 need the
-same native arm64 interpreter, and `cryptography` 50.x ships arm64-only macOS
-wheels. Install the python.org universal2 build before either.
+Three of the five run in containers (`p3_sdk_run.sh`, `p6_pandas_run.sh`,
+`p6_dbt_run.sh`). That is now the pattern rather than an exception, and the
+native arm64 interpreter is still worth installing before Part 9 — Snowpark
+and `snowflake-ml-python` want to be on the Mac itself.
 
 ### Row counts as they stand
 

@@ -1,0 +1,26 @@
+# Committed on purpose. There is no secret in this file -- only an account,
+# a user, a role and the PATH to a key. The key itself is gitignored (*.p8).
+#
+# SVC_CI, not SVC_KAFKA: dbt is QC_ENGINEER's work, and QC_LOADER cannot create
+# in CORE or MART where the models will go in Part 6. Splitting the two service
+# users is the whole reason for having two.
+qcommerce:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: AWTTGVH-OLB61128
+      user: SVC_CI
+      role: QC_ENGINEER
+      private_key_path: "{{ env_var('DBT_KEY_PATH', '/work/rsa_ci.p8') }}"
+      database: QCOMMERCE
+      warehouse: WH_TRANSFORM_XS
+      schema: RAW
+      threads: 4
+      client_session_keep_alive: false
+      # Every session tagged, same as every other part. This is what makes
+      # WAREHOUSE_METERING_HISTORY attributable per mechanism instead of a
+      # single undifferentiated number.
+      query_tag: p06:dbt_seeds
+      retry_on_database_errors: true
+      connect_retries: 2

@@ -1,0 +1,24 @@
+category_l1,category_l2,category_l3,shelf_life_days,needs_cold_chain,pick_priority
+Grocery,Staples,Rice,180,False,3
+Grocery,Staples,Atta,180,False,3
+Grocery,Staples,Pulses,180,False,3
+Grocery,Staples,Sugar,180,False,3
+Grocery,Snacks,Chips,90,False,2
+Grocery,Snacks,Biscuits,90,False,2
+Grocery,Snacks,Namkeen,90,False,2
+Fresh,Produce,Vegetables,1,True,1
+Fresh,Produce,Fruits,1,True,1
+Fresh,Dairy,Milk,1,True,1
+Fresh,Dairy,Curd,1,True,1
+Fresh,Dairy,Paneer,1,True,1
+Fresh,Dairy,Cheese,1,True,1
+Beverages,Cold,Soft Drinks,3,True,1
+Beverages,Cold,Juices,3,True,1
+Beverages,Cold,Energy,3,True,1
+Beverages,Hot,Tea,30,False,2
+Beverages,Hot,Coffee,30,False,2
+Household,Cleaning,Detergent,365,False,3
+Household,Cleaning,Floor Cleaner,365,False,3
+Household,Personal Care,Shampoo,365,False,3
+Household,Personal Care,Soap,365,False,3
+Household,Personal Care,Oral Care,365,False,3
