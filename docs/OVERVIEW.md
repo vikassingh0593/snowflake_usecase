@@ -169,7 +169,7 @@ did.
 | **Source systems** | ✅ Done | The operational database, its live change feed, and the app event stream are running and producing data |
 | **Cloud storage and access** | ✅ **Done** | File storage created in the same region as the platform, with four separate areas for arriving files, archives, partner data and documents. The platform has been granted least-privilege access to each: it can write only to the archive, and read the rest |
 | Platform foundation | ✅ Done | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
-| Data arrival | 🔜 **Next** | Connecting all fourteen routes data takes into the platform. **None built yet — this is where work resumes** |
+| Data arrival | 🟡 In progress | **3 of 14 routes live.** The same 79,663 app events now reach the platform three different ways — through a message broker in two different modes, and directly with no broker at all — so the cost and speed of each can be compared on identical data |
 | Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
 | Risk prediction | ⬜ | Training and deploying the late-delivery model |
 | Forecasting and text analysis | ⬜ | Demand forecast, anomaly detection, complaint analysis |

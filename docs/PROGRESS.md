@@ -97,6 +97,50 @@ creation with no extra statement.
 unreadable. Use `--format json` for those, or run them in the VS Code extension,
 which gives a grid.
 
+### Mechanisms 1, 2 and 3 complete
+
+79,663 rows on each path, exactly. Same events, three unrelated routes into
+Snowflake, no duplicates and no loss on any of them.
+
+| Mechanism | How | Table |
+|---|---|---|
+| 1 | Kafka Connector **v4.1.0** `SnowflakeStreamingSinkConnector`, 3 tasks | `RAW.ORDER_STATUS_KAFKA_V4` |
+| 2 | Python **Snowpipe Streaming SDK 1.8.0**, one channel, no broker | `RAW.ORDER_STATUS_SDK` |
+| 3 | Kafka Connector **v3.5.4** `SnowflakeSinkConnector`, `SNOWPIPE`, 60s flush | `RAW.ORDER_STATUS_KAFKA_V3FILE` |
+
+### What this part actually taught
+
+**v4 is not v3 with a flag.** It is a different connector class, streaming
+only, with file mode removed. Comparing streaming against file mode means
+running two connector majors side by side in isolated plugin directories -
+which states the change more clearly than any config toggle would have.
+
+**Snowpipe Streaming is pipe-implicit, not pipe-less.** Both v4 and the SDK
+created a pipe behind the target table (`ORDER_STATUS_KAFKA_V4-STREAMING`,
+`ORDER_STATUS_SDK-STREAMING`) without either being declared. That is what lets
+offset tokens live server-side, and it gives per-mechanism credit attribution
+for free through `PIPE_USAGE_HISTORY`.
+
+**Offset tokens are the SDK's whole argument.** Running `sdk_stream.py` twice
+appends nothing the second time, because the channel reports a token Snowflake
+committed rather than one the client tracked. Kafka Connect hides that; the SDK
+makes it the interface.
+
+### Five failures, in order
+
+| Failure | Cause |
+|---|---|
+| v4 registration HTTP 500 | v4 does not bundle BouncyCastle FIPS; v3 does. Needed `bc-fips` + `bcpkix-fips` in the v4 plugin dir |
+| v4 FAILED on config validation, twice | A compatibility validator demanding v3 naming, then v3-style client-side validation. Disabled it: table names are explicit and schematization is off, so it guarded nothing while costing server-side validation |
+| Both connectors green, zero rows | `qc.order_status` was empty. It had been produced by hand and a `docker compose down -v` destroyed it. Named volumes added |
+| v4 stuck at 26,058 rows | Partitions added under a running connector are stranded: the sink opens a channel per partition at task open. Restarting the tasks fixed it |
+| SDK `ConfigError: missing host` | The Rust core does not derive a host from the account identifier the way the Python connector does |
+
+**The pattern across all five: a green status field never once told the truth.**
+Container "Started" but exited; connector `RUNNING` on an empty topic; group
+`Stable` with two partitions uncommitted. Every diagnosis came from a count or
+a lag number.
+
 ---
 
 ## Resume here
