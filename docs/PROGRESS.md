@@ -143,6 +143,35 @@ a lag number.
 
 ---
 
+### Part 4 complete — mechanisms 4, 5, 6, 7
+
+| # | Mechanism | Result |
+|---|---|---|
+| 4 | Snowpipe auto-ingest, Event Grid | 10,051 rows, 5 files, one LOAD_TS each |
+| 5 | Snowpipe REST `insertFiles`, internal stage | 8,097 rows, 4 files LOADED |
+| 6 | Bulk `COPY`, `INFER_SCHEMA` + `MATCH_BY_COLUMN_NAME` | 40,000 rows |
+| 7 | Schema evolution | 8 → 9 columns, `COUPON_CODE` added by a load |
+| — | Bad-file test | 203 parsed, 200 loaded, 3 rejected, all three named by `VALIDATE()` |
+
+Push versus pull is the point of running 4 and 5 together: storage tells
+Snowflake, or the client does. Auto-ingest is impossible on an internal stage
+because there is no event source, which is why `AUTO_INGEST` is absent from
+that pipe rather than set false.
+
+### Four more traps
+
+| Trap | What happened |
+|---|---|
+| Control plane vs data plane | Owning the subscription lets you create a storage account but grants no blob access. `--auth-mode login` needs Storage Blob Data Contributor on your own identity — the same split that broke `generateUserDelegationKey` in Part 2 |
+| `VALIDATION_MODE` + `MATCH_BY_COLUMN_NAME` | Mutually exclusive: Snowflake treats the column match as a transform. Its real home is a genuinely malformed file |
+| CSV unload quotes its own delimiters | Pre-formatted CSV text in one column came back as `"800000,42,3,50000"` — one field, not four — so all 200 good rows failed on column count. Needs `FIELD_OPTIONALLY_ENCLOSED_BY = NONE` |
+| `VALIDATE(JOB_ID => '_last')` is session-scoped | `_last` means the last `COPY` in the *current* session, and the CLI opens a new one per invocation. `COPY` and `VALIDATE` must share a session |
+
+`snow sql` reserved-word aliases hit twice: `rows` and `check`. Use `n`, `val`,
+`item`, `label`.
+
+---
+
 ## Resume here
 
 ### 1. Bring the source stack back up
