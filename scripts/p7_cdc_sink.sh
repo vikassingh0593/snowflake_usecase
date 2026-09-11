@@ -20,6 +20,10 @@
 # That before-image is the whole reason CDC beats a nightly extract for SCD2,
 # and unwrapping it at ingest would throw away the only copy.
 #
+# The POST response from Connect echoes the full config back, private key
+# included. Nothing in this script prints that response raw -- the key is
+# redacted before anything reaches stdout. A key in scrollback is a leaked key.
+#
 #   bash scripts/p7_cdc_sink.sh diagnose  where the data actually is. Read-only
 #   bash scripts/p7_cdc_sink.sh resnapshot force Debezium to snapshot again
 #   bash scripts/p7_cdc_sink.sh check     topic sizes, register nothing
@@ -151,6 +155,14 @@ check)
     else                     printf "  %-20s %s records\n" "$t" "$d"; fi
   done
   echo
+  echo "  (RAW=1 to print rpk's own output instead of a parsed depth)"
+  if [ "${RAW:-0}" = "1" ]; then
+    for t in $(echo "$TOPICS" | tr ',' ' '); do
+      echo; echo "--- $t"
+      docker exec qc-redpanda rpk topic describe -p "$t" 2>&1 | head -8
+    done
+  fi
+  echo
   echo "Expect roughly: dark_stores 8 · customers 500 · products 200 · riders 60"
   echo "                inventory 96,000 · orders 20,000 · order_items 54,635"
   echo
@@ -189,8 +201,29 @@ create)
   }
 }
 JSON
+  # REDACTED. Connect echoes the whole config back on a successful POST,
+  # including snowflake.private.key. Piping that to stdout puts the private key
+  # in terminal scrollback, in any screenshot, and in anything the output is
+  # pasted into. Nothing prints the response raw.
   curl -s -X POST -H "Content-Type: application/json" \
-       --data @/tmp/qc-cdc-sink.json "$CONNECT/connectors" | python3 -m json.tool
+       --data @/tmp/qc-cdc-sink.json "$CONNECT/connectors" \
+    | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    print("non-JSON response from Connect; check: docker logs qc-connect"); raise SystemExit(1)
+if "error_code" in r:
+    print("FAILED", r.get("error_code"), r.get("message", "")[:400]); raise SystemExit(1)
+cfg = r.get("config", {})
+for k in list(cfg):
+    if "private" in k or "password" in k or "secret" in k:
+        cfg[k] = "<redacted, %d chars>" % len(cfg[k])
+print("registered:", r.get("name"))
+print("  topics :", cfg.get("topics", "")[:120])
+print("  tables :", cfg.get("snowflake.topic2table.map", "")[:200])
+print("  key    :", cfg.get("snowflake.private.key"))
+'
   rm -f /tmp/qc-cdc-sink.json
   echo
   echo "Give it a minute, then: bash scripts/p7_cdc_sink.sh status"
