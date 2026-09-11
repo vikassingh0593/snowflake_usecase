@@ -18,6 +18,10 @@
 -- PREREQUISITE: APPLY=1 bash scripts/p7_mutate_source.sh. Until then every CDC
 -- row is op = 'r' with before = null, and there is no history to version.
 --
+-- RE-RUNNING: the dimension seed is guarded by NOT EXISTS, so a second run adds
+-- nothing. To rebuild it from scratch, drop it first:
+--   DROP TABLE IF EXISTS QCOMMERCE.CORE.DIM_PRODUCT;
+--
 -- COST: resumes WH_TRANSFORM_XS. A few hundred rows through a MERGE and a
 -- stream. Under 0.01 credits.
 -- =============================================================================
@@ -168,19 +172,46 @@ CREATE TABLE IF NOT EXISTS CORE.DIM_PRODUCT (
   ROW_HASH      STRING
 );
 
--- Seed the dimension on first run: every current product becomes version 1,
--- open-ended. Guarded so a re-run does not duplicate it.
+-- Seed version 1 from the SNAPSHOT rows, not from CORE.PRODUCT.
+--
+-- This is the ordering that matters, and getting it wrong destroys exactly the
+-- history SCD2 exists to keep. STEP 3 has already merged the new prices into
+-- CORE.PRODUCT by the time this runs. Seeding from that table records 57385 as
+-- the original value, the versioning MERGE then compares identical hashes, and
+-- the result is 200 rows with zero closed versions -- which looks like a
+-- dimension that simply has not changed yet.
+--
+-- The state a change started from is still available: the op = 'r' rows are the
+-- initial snapshot, and every later version is in the log beside them. That is
+-- the entire argument for keeping the CDC log rather than only the current
+-- state.
 INSERT INTO CORE.DIM_PRODUCT
-SELECT MD5(p.PRODUCT_ID::STRING || '|' || p.CDC_TS::STRING) AS PRODUCT_SK,
-       p.PRODUCT_ID, p.SKU, p.PRODUCT_NAME,
-       p.CATEGORY_L1, p.CATEGORY_L2, p.CATEGORY_L3,
-       p.PRICE_PAISE, p.IS_ACTIVE,
-       '1900-01-01'::TIMESTAMP_NTZ AS VALID_FROM,
-       NULL                        AS VALID_TO,
-       TRUE                        AS IS_CURRENT,
-       MD5(CONCAT_WS('|', p.PRODUCT_NAME, p.CATEGORY_L3,
-                          p.PRICE_PAISE::STRING, p.IS_ACTIVE::STRING)) AS ROW_HASH
-FROM   CORE.PRODUCT p
+WITH snapshot AS (
+  SELECT
+    RECORD_CONTENT:after:product_id::NUMBER                   AS PRODUCT_ID,
+    RECORD_CONTENT:after:sku::STRING                          AS SKU,
+    RECORD_CONTENT:after:name::STRING                         AS PRODUCT_NAME,
+    RECORD_CONTENT:after:category_l1::STRING                  AS CATEGORY_L1,
+    RECORD_CONTENT:after:category_l2::STRING                  AS CATEGORY_L2,
+    RECORD_CONTENT:after:category_l3::STRING                  AS CATEGORY_L3,
+    RECORD_CONTENT:after:price_paise::NUMBER                  AS PRICE_PAISE,
+    RECORD_CONTENT:after:is_active::BOOLEAN                   AS IS_ACTIVE,
+    TO_TIMESTAMP_NTZ(RECORD_CONTENT:ts_ms::NUMBER, 3)         AS CDC_TS
+  FROM RAW.CDC_PRODUCTS
+  WHERE RECORD_CONTENT:op::STRING = 'r'
+  QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY RECORD_CONTENT:after:product_id::NUMBER
+            ORDER BY RECORD_METADATA:offset::NUMBER) = 1
+)
+SELECT MD5(PRODUCT_ID::STRING || '|' || CDC_TS::STRING) AS PRODUCT_SK,
+       PRODUCT_ID, SKU, PRODUCT_NAME, CATEGORY_L1, CATEGORY_L2, CATEGORY_L3,
+       PRICE_PAISE, IS_ACTIVE,
+       CDC_TS AS VALID_FROM,
+       NULL   AS VALID_TO,
+       TRUE   AS IS_CURRENT,
+       MD5(CONCAT_WS('|', PRODUCT_NAME, CATEGORY_L3,
+                          PRICE_PAISE::STRING, IS_ACTIVE::STRING)) AS ROW_HASH
+FROM   snapshot
 WHERE  NOT EXISTS (SELECT 1 FROM CORE.DIM_PRODUCT);
 
 -- The versioning MERGE reads CORE.PRODUCT, not the stream. The stream proves
