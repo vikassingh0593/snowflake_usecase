@@ -204,9 +204,26 @@ LIMIT  3;
 
 -- Free text with a numeric id in it. Part 10 pulls that out with a regex UDF,
 -- because a regex is the right tool for an id and a language model is not.
-SELECT COUNT(*) AS bodies_naming_an_order
-FROM   RAW.COMPLAINT_DOC
-WHERE  REGEXP_LIKE(BODY, '.*Order [0-9]+.*');
+--
+-- This was REGEXP_LIKE(BODY, '.*Order [0-9]+.*') and returned 0 on 300 bodies
+-- that visibly contain "Order 17788". Two Snowflake behaviours compound:
+--
+--   REGEXP_LIKE is implicitly anchored to the WHOLE string. It is a match, not
+--   a search -- unlike almost every other regex engine's equivalent.
+--   `.` does not cross a newline unless the 's' parameter is passed.
+--
+-- So '.*Order [0-9]+.*' can only succeed on a single-line subject, and every
+-- body here is multi-line. REGEXP_SUBSTR searches rather than matches, and this
+-- pattern contains no `.` at all, so newlines are irrelevant to it.
+--
+-- Extracting the id rather than testing for one also makes the check falsifiable:
+-- the generator draws order ids from 1..20000, so a value outside that range
+-- means the regex matched something that is not an order id.
+SELECT COUNT(*)                                                             AS docs,
+       COUNT(REGEXP_SUBSTR(BODY, 'Order ([0-9]+)', 1, 1, 'e', 1))           AS with_order_id,
+       MIN(TRY_TO_NUMBER(REGEXP_SUBSTR(BODY, 'Order ([0-9]+)', 1, 1, 'e', 1))) AS min_order_id,
+       MAX(TRY_TO_NUMBER(REGEXP_SUBSTR(BODY, 'Order ([0-9]+)', 1, 1, 'e', 1))) AS max_order_id
+FROM   RAW.COMPLAINT_DOC;
 
 -- =============================================================================
 -- TEARDOWN
