@@ -1,226 +1,243 @@
-# Quick-Commerce Analytics Platform — what it is and why
+# Quick-Commerce Analytics Platform — Architecture
 
-A plain-language companion to `docs/ARCHITECTURE.md`. That document is for engineers.
-This one is for anyone who needs to know what we are building, what it will answer, and
-where we have got to.
+Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
+(build log). This document states what the platform is and what has been built.
+Technology is named generically, with the specific product in brackets.
 
-**Living document.** The status table at the end is updated as each stage lands.
+**Status: ingestion complete at 13 of 14 routes. No transformation built yet.**
 
 ---
 
-## 1. The business problem
+## 1. Purpose
 
-Quick commerce sells a promise, not just goods. When a customer places an order, the app
-commits to a delivery time — typically 10 to 25 minutes. That promise is the product. A
-late delivery costs more than the order: it costs the refund, the support call, and
-often the customer.
+An analytics platform for a quick-commerce operator — dark stores fulfilling
+grocery orders against a delivery promise of 10 to 25 minutes.
 
-Today most operators find out about a breach when it has already happened. The dispatcher
-sees the order go red on a screen and has no time left to do anything useful.
-
-**The question this platform answers: which orders are going to be late, early enough to
-do something about it?**
-
-And behind that, the questions a business needs answered every day:
-
-| Question | Who asks it |
+| Question | Consumer |
 |---|---|
-| Which stores are missing their promise, and at what hours? | Operations manager |
-| Which orders currently in flight are at risk right now? | Dispatcher |
-| Why did our on-time rate drop last Tuesday? | Regional head |
-| How much stock will each store need tomorrow? | Supply planning |
-| What are customers actually complaining about? | Customer experience |
-| Who is allowed to see customer contact details? | Compliance |
+| Which orders in flight will breach their promise? | Dispatcher |
+| Which stores miss their promise, at which hours? | Operations |
+| Why did the on-time rate move? | Regional management |
+| How much stock will each store need? | Supply planning |
+| What are customers complaining about? | Customer experience |
+| Who may see customer contact details? | Compliance |
+
+Operator decisions on at-risk orders are captured as data and become training
+input for later model versions.
 
 ---
 
-## 2. The business we are modelling
+## 2. Domain and scale
 
-A quick-commerce operator in Delhi NCR:
-
-| | |
+| Entity | Volume |
 |---|---|
-| **8 dark stores** | small warehouses, not shops. No customers walk in |
-| **60 riders** | attached to a store, working shifts |
-| **500 customers**, **200 products** | across grocery, fresh, beverages, household |
-| **20,000 orders** over 60 days | each with a promised delivery time |
-| **~16% arrive late** | the number the whole platform exists to reduce |
+| Dark stores | 8 (Delhi NCR) |
+| Riders | 60 |
+| Customers | 500 |
+| Products | 200 across 4 categories, 3-level hierarchy |
+| Orders | 20,000 over 60 days |
+| Order lines | 54,635 |
+| Stock snapshots | 96,000 |
+| Order status events | 79,663 |
+| SLA breach rate | 16.4% |
 
-Every amount of money is held in **paise, as a whole number**. Never ₹461.19 — always
-46119. Money expressed as a decimal accumulates rounding errors as it moves between
-systems; whole paise cannot. It is a small decision that prevents a whole category of
-"the numbers don't tie out" meetings.
+**Monetary values are stored as integer paise.** No decimal currency anywhere in
+the pipeline.
 
----
-
-## 3. The journey of one order
-
-This is the platform in one story.
-
-**A customer places an order at 7:42pm.** The app writes it to the operational database
-and promises delivery by 8:02pm.
-
-**Within seconds**, that new order is copied into the analytics platform. We do not wait
-for a nightly batch — the operational database publishes every change as it happens, and
-the platform picks it up continuously.
-
-**Meanwhile the order emits events** as it moves: accepted, packed, picked up by a rider,
-delivered. Each one arrives separately, within seconds. The rider's phone also sends its
-location every few seconds while the delivery is in progress.
-
-**The platform scores the order for risk** using what it knows at that moment: how far
-the customer is from the store, how busy the store is right now, how many items are in
-the basket, what time of day it is, and how that store has been performing this week.
-
-**The dispatcher sees it on a screen** — a queue of at-risk orders, worst first. They can
-reassign a rider, extend the promise and tell the customer, or issue a credit up front.
-
-**Whatever they choose is recorded.** And here is the part that matters: those decisions
-feed back into the platform as data. Next month's risk model knows which interventions
-actually worked. **The system learns from its own operators.**
-
-**Afterwards**, the order joins the historical record — feeding the store scorecards, the
-demand forecast, and the analysis of why on-time rates move.
+**Deliberate data defects**, injected at generation so downstream handling is
+exercised rather than assumed: 1% duplicate events (at-least-once delivery), 2%
+skipped or out-of-order status transitions.
 
 ---
 
-## 4. How the platform is put together
+## 3. Layer architecture
 
-Data moves through five stages. Each has one job, and the discipline of not letting them
-blur is what keeps the whole thing trustworthy.
+| Layer | Schema | Contents | Rule |
+|---|---|---|---|
+| Landing | `LAND` | Stages, file formats, pipes, integrations | No data at rest |
+| Raw | `RAW` | Data exactly as it arrived | Append-only. No dedupe, no casting, no joins |
+| Core | `CORE` | Deduplicated, conformed, SCD2 history | Single place where duplicates are resolved |
+| Mart | `MART` | Dimensional model in business vocabulary | Star schema |
+| Lab | `LAB` | Experiments, feature engineering, model training | Transient. Unpoliced |
+| Serve | `SERVE` | Governed, quality-gated published output | Nothing reaches a consumer without passing tests |
+| Semantic | `SEMANTIC` | Metric definitions | |
+| App | `APP` | Embedded application objects | |
+| Ops | `OPS` | Benchmarks, cost attribution, quality results | |
 
-| Stage | Plain English | Why it exists separately |
+`LAB` is a sandbox; `SERVE` is a contract. Promotion between them is gated on
+automated quality tests.
+
+---
+
+## 4. Component inventory
+
+| Role | Generic technology | Product used |
 |---|---|---|
-| **Landing** | Data arrives, exactly as sent, and is never edited | If something goes wrong downstream, we can always go back to what actually arrived |
-| **Cleaning** | Duplicates removed, types fixed, history preserved | The same event can legitimately arrive twice. Cleaning is where that is resolved — once, in one place |
-| **Modelling** | Reshaped into the business's own vocabulary: orders, stores, riders, products | So a question like "on-time rate by store by hour" is one simple query, not a research project |
-| **Laboratory** | Where the data science happens: experiments, model training | Deliberately unpoliced. Analysts need room to try things that do not work |
-| **Serving** | The published, governed answers that apps and people are allowed to use | Nothing reaches a dashboard without passing quality checks first |
+| Operational database | Relational OLTP | PostgreSQL 16 (logical replication) |
+| Change data capture | CDC connector | Debezium (`pgoutput`) |
+| Event broker | Kafka | Redpanda (Kafka API compatible) |
+| Broker → warehouse | Kafka sink connector | Snowflake Kafka Connector v4.1.0 and v3.5.4 |
+| Streaming client | Row-level streaming SDK | Snowpipe Streaming SDK |
+| Object storage | Cloud blob storage | Azure Blob Storage (GPv2, hierarchical namespace off) |
+| Storage event notification | Event bus → queue | Azure Event Grid → Azure Storage Queue |
+| Managed file ingestion | Continuous file loader | Snowpipe (auto-ingest and REST) |
+| Open table format | Open columnar table format | Apache Iceberg v3 |
+| Data warehouse | Cloud data warehouse | Snowflake (AWS `us-west-2`) |
+| Transformation framework | SQL transformation + testing | dbt |
+| In-warehouse compute | DataFrame / UDF runtime | Snowpark (Python) |
+| Machine learning | Classical ML | `SNOWFLAKE.ML` functions and scikit-learn in Snowpark |
+| Document parsing | PDF text extraction | `pypdf` in a Python UDF |
+| Application layer | Embedded data app | Streamlit in Snowflake |
+| CI/CD | Pipeline automation | GitHub Actions + Snowflake Git integration |
+| Container runtime | Local containers | Docker Compose |
 
-**The rule that keeps this honest: the laboratory is a sandbox, serving is a contract.**
-Anyone can build anything in the laboratory. Nothing leaves it for the business until it
-has passed automated quality tests. A dashboard can never accidentally be pointed at a
-half-finished experiment.
+Three components run in containers rather than on the workstation — the
+streaming SDK, the DataFrame loader and dbt — because their dependencies have no
+wheels for the workstation's CPU architecture.
 
 ---
 
-## 5. Why the data arrives in so many different ways
+## 5. Object storage layout
 
-Real businesses do not have one neat data source, and this platform deliberately
-demonstrates that. Data arrives:
-
-| From | Example | Arriving |
+| Container | Purpose | Access granted to the warehouse |
 |---|---|---|
-| The operational database | orders, customers, stock | continuously, within seconds |
-| The rider and store apps | status changes, GPS | continuously, thousands per minute |
-| Partner systems | third-party logistics settlement files | as files, on their schedule |
-| Customer service | complaint PDFs and photographs | as documents |
-| The public internet | weather at each store | on request |
-| Data marketplace | reference datasets | shared, never copied |
-| The business itself | category hierarchies, service-level targets | version-controlled, like code |
+| `landing` | Files awaiting continuous ingestion | Read |
+| `archive` | Open-format table storage | **Read and write** |
+| `external` | Partner files queried in place | Read |
+| `docs` | Unstructured documents | Read |
+| `snowpipe-queue` | Storage event notifications | Queue contributor |
 
-Fourteen distinct arrival routes in total. Each is the right answer to a different
-constraint — you cannot make a partner change their file schedule, and you should not
-copy a dataset someone is willing to share.
+Least privilege by container. The warehouse can write to exactly one of them.
+Two separate service principals: one for blob access, one for queue access.
 
 ---
 
-## 6. Trust and control
+## 6. Ingestion routes
 
-Three things make the platform safe to give people access to.
+Thirteen distinct paths carry data into the platform. Each exists because a
+different constraint makes the others wrong.
 
-**Not everyone sees everything.** An analyst querying order data sees a scrambled version
-of the customer's email address, and only the stores they are responsible for. The
-protection is attached to the data itself, not to a particular report — so it cannot be
-bypassed by querying a different way.
+| # | Route | Implementation | Target | Rows |
+|---|---|---|---|---|
+| 1 | Kafka → warehouse, streaming | Kafka connector v4, row-level streaming | `RAW.ORDER_STATUS_KAFKA_V4` | 79,663 |
+| 2 | Direct streaming, no broker | Streaming SDK, channels and offset tokens | `RAW.ORDER_STATUS_SDK` | 79,663 |
+| 3 | Kafka → warehouse, micro-batch files | Kafka connector v3, file mode | `RAW.ORDER_STATUS_KAFKA_V3FILE` | 79,663 |
+| 4 | Storage notifies the warehouse | Snowpipe auto-ingest via Event Grid queue | `RAW.CLICKSTREAM_AUTO` | 10,051 |
+| 5 | Client notifies the warehouse | Snowpipe REST `insertFiles`, internal stage | `RAW.CLICKSTREAM_REST` | 8,097 |
+| 6 | Bulk historical load | `COPY` with schema inference | `RAW.ORDER_BACKFILL` | 40,000 |
+| 7 | Source schema change absorbed | Schema evolution on `COPY` | same table | +1 column |
+| 8 | Query files without loading | External table + insert-only stream | `RAW.EXT_SETTLEMENT` | 2,800 |
+| 9 | Open-format archive | Iceberg v3 on an external volume | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 |
+| 10 | Unstructured documents | Directory table + PDF extraction UDF | `RAW.COMPLAINT_DOC` | 300 |
+| 11 | Outbound API call from the warehouse | External access integration | — | **not available** |
+| 12 | Shared dataset, zero copy | Marketplace share, queried live | `RAW.V_FX_INR_USD` | 15,683 |
+| 13 | DataFrame to table | `write_pandas`, table created from dtypes | `RAW.DIM_STORE_SEED` | 8 |
+| 14 | Version-controlled constants | dbt seeds with tests | 4 tables | 125 |
 
-**The data checks itself.** Automated tests run continuously: are there orders without a
-customer? Risk scores outside the possible range? Missing deliveries? A failure raises an
-alert immediately rather than surfacing as a wrong number in a meeting three weeks later.
+Routes 1, 2 and 3 carry **identical input** so their latency and cost can be
+compared with the data held constant. That comparison is the deliverable, not
+the ingestion.
 
-**Every cost is attributed.** Cloud analytics bills by the second, and it is easy to
-build something that quietly costs more than it earns. Every job here is tagged, so at
-any point we can say exactly what each part of the platform cost to run.
+Route 11 is refused by the account tier. See §10.
 
 ---
 
-## 7. What it produces
+## 7. Data currently in the platform
 
-An operations console with four views:
-
-| View | Answers |
+| Category | Rows |
 |---|---|
-| **Operations** | How is each store performing, by hour? Where are deliveries concentrated on the map? |
-| **Risk queue** | Which orders in flight are likely to be late, and what should I do about each one? |
-| **Ask** | A guided way to answer business questions without writing code |
-| **Data health** | Is the platform itself working, and can I trust today's numbers? |
+| Stored in `RAW` | **376,808** across 14 tables |
+| Queried in place, never copied | 2,800 |
+| Read live from a publisher, never stored | 15,683 |
+| In `CORE`, `MART`, `SERVE`, `LAB` | **0** |
 
-Plus, running underneath: a demand forecast per store and category, automatic detection
-of unusual patterns, and an explanation of *why* a metric moved rather than just that it
-did.
-
----
-
-## 8. Progress
-
-| Stage | Status | What it means in business terms |
-|---|---|---|
-| Capability assessment | ✅ Done | Confirmed what the platform can and cannot do (see §9) |
-| **Source systems** | ✅ Done | The operational database, its live change feed, and the app event stream are running and producing data |
-| **Cloud storage and access** | ✅ **Done** | File storage created in the same region as the platform, with four separate areas for arriving files, archives, partner data and documents. The platform has been granted least-privilege access to each: it can write only to the archive, and read the rest |
-| Platform foundation | ✅ Done | Analytics environment, nine data zones, three compute clusters, four access roles and a spending cap are live |
-| Data arrival | ✅ **Done, 13 of 14** | Thirteen distinct routes carry data in. The fourteenth — calling a public weather service from inside the platform — is refused by the account type we are on, not by anything we built, so it stays documented rather than worked around. Complaint documents now arrive as PDFs and are read by a text extractor built in-house, because the ready-made one is unavailable on this account |
-| Cleaning and modelling | ⬜ | Turning raw arrivals into the business's vocabulary |
-| Risk prediction | ⬜ | Training and deploying the late-delivery model |
-| Forecasting and text analysis | ⬜ | Demand forecast, anomaly detection, complaint analysis |
-| Operations console | ⬜ | The four-view application, including the learning feedback loop |
-| Governance | ⬜ | Access controls, quality alerts, cost reporting |
-| Sharing | ⬜ | Publishing data to partners and external consumers |
+The three order-status tables hold the same 79,663 events. That triplication is
+by design and is resolved in `CORE`, which is not built.
 
 ---
 
-### Where things stand, in one sentence
+## 8. Access model
 
-**Thirteen of the fourteen arrival routes are live, the fourteenth is refused by
-the account type, and nothing has moved past the landing zone.** 376,808 records
-sit inside the platform exactly as they arrived. Turning them into the
-business's own vocabulary is the next stage and none of it has started.
-
-| | |
+| Role | Grants |
 |---|---|
-| Records inside the analytics platform | **376,808** |
-| Read where they sit, never copied | 2,800 |
-| Used live from a publisher, never stored | 15,683 |
-| Arrival routes connected | **13 of 14** |
-| Records cleaned, modelled or served | **0** |
-| Cloud spend confirmed | 3.78 of ~200 credits |
+| `QC_ADMIN` | Owns the database |
+| `QC_LOADER` | Writes `LAND` and `RAW` only |
+| `QC_ENGINEER` | Full access to transformation and lab schemas |
+| `QC_ANALYST` | `SERVE` and `SEMANTIC` views only. No base-table access anywhere |
 
-Complaint letters now arrive as PDFs and are read automatically. The ready-made
-document reader is unavailable on this account, so one was built instead — 300
-documents, no failures. That reader is ours: inspectable, versioned, and not
-subject to a supplier changing it.
+Two service accounts, both typed as service accounts and both **key-pair
+authentication only**. No password exists in any file or configuration. Private
+keys are excluded from version control.
 
-**The one route that could not be built** would have let the platform call a
-public weather service directly, with no external tool in the loop. The account
-tier refuses it. Both halves of the plumbing were accepted; only the piece that
-joins them is withheld. Weather was that route's cargo rather than something
-anything else depends on, so nothing downstream changes — and a limit found now,
-written down, is worth more than a workaround that hides it.
-
-**What has not been done still matters more than what has.** There is still no
-spending alert covering the continuous-loading services; the existing cap only
-sees the query engine. Thirteen routes have now run without it.
+Planned governance builds each control two ways — attached to the data (column
+and row policies) and approximated through restricted views — and compares them.
 
 ---
 
-## 9. Two constraints worth knowing about
+## 9. Cost controls
 
-**The account cannot use the built-in AI text features.** They are disabled on this
-account type. This affects how complaints are analysed: instead of a ready-made AI
-service, we train our own classification model. More work to build, but the model is ours
-— it can be inspected, versioned, and improved, which a black-box service cannot.
+| Control | Setting |
+|---|---|
+| Compute clusters | 3 × extra-small, never resized |
+| Idle shutdown | 60 seconds |
+| Resource monitor | 60 credits, notify at 50/75/90%, suspend at 100% |
+| Data retention | 1 day |
+| Statement timeout | 600 seconds |
+| Attribution | Every session tagged; every route's spend separable |
+| Account budget | **Not configured** |
 
-**The account has stronger governance features than expected.** Data protection can be
-attached directly to columns and rows rather than approximated through restricted views.
-We will build both approaches side by side and compare them, which turns a constraint
-into a genuinely useful finding about how to protect data.
+The resource monitor covers warehouse compute only. Continuous ingestion,
+serverless refresh and search optimization are invisible to it; an account
+budget is the only control that sees them.
+
+Confirmed spend: 3.78 credits. That figure predates all ingestion work.
+
+---
+
+## 10. Platform constraints
+
+Three properties of this account shaped the design. All three were established by
+attempting the operation, not by reading a privileges listing.
+
+| Constraint | Consequence |
+|---|---|
+| **Managed AI text functions unavailable** — account tier | Complaint classification, sentiment and embeddings are built as trained models running in the warehouse rather than called as a managed service |
+| **Enterprise-grade governance available** | Protection attaches directly to columns and rows; the restricted-view approximation is built alongside for comparison rather than out of necessity |
+| **Outbound network access unavailable** — account tier | Route 11 cannot be built. The network rule and the secret both create successfully; only the integration that binds them to a function is refused |
+
+Route 11's payload was weather per store. Nothing downstream depends on it — the
+risk model's features are distance, hour of day, store load, basket size and
+rider assignment. The route is kept in the repository as design, not deleted.
+
+---
+
+## 11. Build status
+
+| Stage | Status |
+|---|---|
+| Capability assessment | Complete |
+| Source systems | Complete |
+| Object storage and access | Complete |
+| Warehouse foundation | Complete |
+| **Ingestion** | **Complete — 13 of 14 routes** |
+| Cleaning and conformance (`CORE`) | Not started |
+| Dimensional model (`MART`) | Not started |
+| Risk scoring | Not started |
+| Forecasting and text analysis | Not started |
+| Application layer | Not started |
+| Governance | Not started |
+| Outbound sharing | Not started |
+
+---
+
+## 12. Repository
+
+| Path | Contents |
+|---|---|
+| `docs/OVERVIEW.md` | This document |
+| `docs/ARCHITECTURE.md` | Engineering design and as-built identifiers |
+| `docs/PROGRESS.md` | Build log |
+| `source/` | Container stack, database schema, data generators, CDC configuration |
+| `sql/` | Warehouse DDL and ingestion routes, by part |
+| `scripts/` | Cloud resource provisioning, connector setup, container runners |
+| `dbt/` | Transformation project and version-controlled seeds |
