@@ -32,6 +32,32 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Topic depth, summed across partitions. Parsed by HEADER NAME, not by field
+# position: rpk's column layout varies with version and whether the ERROR
+# column is populated, and `awk '{print $NF}'` silently reported 0 for topics
+# that were full -- a zero that looked exactly like an empty topic.
+depth() {
+  docker exec qc-redpanda rpk topic describe -p "$1" 2>/dev/null | python3 -c '
+import sys
+col = None
+total = 0
+seen = False
+for line in sys.stdin:
+    f = line.split()
+    if not f:
+        continue
+    if "LOG-END-OFFSET" in f:
+        col = f.index("LOG-END-OFFSET")
+        continue
+    if col is not None and f[0].isdigit() and len(f) > col:
+        try:
+            total += int(f[col]); seen = True
+        except ValueError:
+            pass
+print(total if seen else -1)
+'
+}
+
 RESET="${RESET:-0}"
 CONNECT="localhost:8083"
 
@@ -120,14 +146,23 @@ echo
 echo "== 7. waiting for the snapshot"
 # order_items is the second largest table and the last to finish, so its depth
 # is the signal that the snapshot is done rather than merely started.
+snapshot_done=0
 for i in $(seq 1 60); do
-  hw=$(docker exec qc-redpanda rpk topic describe -p qc.order_items 2>/dev/null \
-       | awk '/^[0-9]/ {print $NF}' | tail -1)
-  [ "${hw:-0}" -ge 54635 ] 2>/dev/null && { echo "   snapshot complete"; break; }
-  printf "   %ds — order_items: %s / 54635\r" $((i*5)) "${hw:-0}"
+  hw=$(depth qc.order_items)
+  [ "$hw" -ge 54635 ] 2>/dev/null && { echo "   snapshot complete: $hw records"; snapshot_done=1; break; }
+  printf "   %ds — order_items: %s / 54635\r" $((i*5)) "$([ "$hw" = "-1" ] && echo "topic missing" || echo "$hw")"
   sleep 5
 done
 echo
+
+# Fail loudly. Falling through to the next step on a snapshot that never
+# happened is the same silent-success failure this project keeps hitting.
+if [ "$snapshot_done" != "1" ]; then
+  echo "SNAPSHOT DID NOT COMPLETE after 300s. Nothing further will work."
+  echo "  curl -s localhost:8083/connectors/qc-postgres-cdc/status | python3 -m json.tool"
+  echo "  docker logs qc-connect 2>&1 | grep -iE 'snapshot|ERROR' | tail -30"
+  exit 1
+fi
 
 bash scripts/p7_cdc_sink.sh check
 

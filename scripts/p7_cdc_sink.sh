@@ -48,6 +48,32 @@ NAME="qc-snowflake-cdc-v4"
 TOPICS="qc.dark_stores,qc.customers,qc.products,qc.riders,qc.inventory,qc.orders,qc.order_items"
 MAP="qc.dark_stores:CDC_DARK_STORES,qc.customers:CDC_CUSTOMERS,qc.products:CDC_PRODUCTS,qc.riders:CDC_RIDERS,qc.inventory:CDC_INVENTORY,qc.orders:CDC_ORDERS,qc.order_items:CDC_ORDER_ITEMS"
 
+# Topic depth, summed across partitions. Parsed by HEADER NAME, not by field
+# position: rpk's column layout varies with version and whether the ERROR
+# column is populated, and `awk '{print $NF}'` silently reported 0 for topics
+# that were full -- a zero that looked exactly like an empty topic.
+depth() {
+  docker exec qc-redpanda rpk topic describe -p "$1" 2>/dev/null | python3 -c '
+import sys
+col = None
+total = 0
+seen = False
+for line in sys.stdin:
+    f = line.split()
+    if not f:
+        continue
+    if "LOG-END-OFFSET" in f:
+        col = f.index("LOG-END-OFFSET")
+        continue
+    if col is not None and f[0].isdigit() and len(f) > col:
+        try:
+            total += int(f[col]); seen = True
+        except ValueError:
+            pass
+print(total if seen else -1)
+'
+}
+
 cmd="${1:-diagnose}"
 
 case "$cmd" in
@@ -120,10 +146,9 @@ check)
   # Per topic, so one missing topic does not abort the whole report. rpk exits
   # nonzero on UNKNOWN_TOPIC_OR_PARTITION, which would otherwise hide the rest.
   for t in $(echo "$TOPICS" | tr ',' ' '); do
-    printf "  %-20s " "$t"
-    docker exec qc-redpanda rpk topic describe -p "$t" 2>/dev/null \
-      | awk '/^[0-9]/ {hw=$NF} END {print (hw == "" ? "MISSING" : hw " records")}' \
-      || echo "MISSING"
+    d=$(depth "$t")
+    if [ "$d" = "-1" ]; then printf "  %-20s MISSING\n" "$t"
+    else                     printf "  %-20s %s records\n" "$t" "$d"; fi
   done
   echo
   echo "Expect roughly: dark_stores 8 · customers 500 · products 200 · riders 60"
