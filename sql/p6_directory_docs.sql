@@ -120,12 +120,24 @@ LIMIT  1;
 -- The scoped URL is built and consumed in the same statement and never stored.
 -- Persisting one would bake in a 24-hour expiry and a privilege snapshot.
 -- =============================================================================
+-- FILE_MODIFIED is TIMESTAMP_TZ, not TIMESTAMP_LTZ. DIRECTORY() returns
+-- LAST_MODIFIED as TIMESTAMP_TZ(3) and Snowflake will not implicitly convert
+-- between the two on insert -- it raises "Expression type does not match column
+-- data type" and the whole statement fails. Matching the source type is also
+-- the right call rather than casting: that timestamp is Azure's, carrying the
+-- offset the blob was written with, and RAW holds what arrived. LOAD_TS stays
+-- LTZ because that one is our clock.
+--
+-- IF NOT EXISTS, not OR REPLACE: this table is filled from a stream and is
+-- meant to be additive across runs, so replacing it would discard earlier
+-- loads. The cost is that a column-type change needs an explicit drop first:
+--   DROP TABLE IF EXISTS QCOMMERCE.RAW.COMPLAINT_DOC;
 CREATE TABLE IF NOT EXISTS RAW.COMPLAINT_DOC (
   TICKET_ID       STRING,
   RELATIVE_PATH   STRING,
   FILE_SIZE       NUMBER,
   FILE_MD5        STRING,
-  FILE_MODIFIED   TIMESTAMP_LTZ,
+  FILE_MODIFIED   TIMESTAMP_TZ,
   BODY            STRING,
   BODY_CHARS      NUMBER,
   LOAD_TS         TIMESTAMP_LTZ
