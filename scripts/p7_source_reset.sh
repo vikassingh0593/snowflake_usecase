@@ -32,28 +32,30 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Topic depth, summed across partitions. Parsed by HEADER NAME, not by field
-# position: rpk's column layout varies with version and whether the ERROR
-# column is populated, and `awk '{print $NF}'` silently reported 0 for topics
-# that were full -- a zero that looked exactly like an empty topic.
+# Topic depth, summed across partitions. Parsed by looking the column up by
+# name, and by more than one name: rpk v24 calls it HIGH-WATERMARK where older
+# builds call it LOG-END-OFFSET. Two parsers have already been wrong here --
+# `awk '{print $NF}'` grabbed the wrong field, then a single hard-coded header
+# name matched nothing. Both returned a number indistinguishable from an empty
+# topic. -1 means the topic does not exist; 0 means it exists and is empty.
 depth() {
   docker exec qc-redpanda rpk topic describe -p "$1" 2>/dev/null | python3 -c '
 import sys
-col = None
-total = 0
-seen = False
+
+col, total, seen = None, 0, False
 for line in sys.stdin:
     f = line.split()
     if not f:
         continue
-    if "LOG-END-OFFSET" in f:
-        col = f.index("LOG-END-OFFSET")
+    if col is None:
+        for h in ("HIGH-WATERMARK", "LOG-END-OFFSET"):
+            if h in f:
+                col = f.index(h)
+                break
         continue
-    if col is not None and f[0].isdigit() and len(f) > col:
-        try:
-            total += int(f[col]); seen = True
-        except ValueError:
-            pass
+    if f[0].isdigit() and len(f) > col and f[col].isdigit():
+        total += int(f[col])
+        seen = True
 print(total if seen else -1)
 '
 }
@@ -144,11 +146,13 @@ curl -s -X POST -H "Content-Type: application/json" \
 
 echo
 echo "== 7. waiting for the snapshot"
-# order_items is the second largest table and the last to finish, so its depth
-# is the signal that the snapshot is done rather than merely started.
+# qc.qc.order_items, not qc.order_items. Debezium's Postgres topic name is
+# <topic.prefix>.<schema>.<table>, and both the prefix and the schema are "qc".
+# order_items is the last of the seven to finish, so its depth is the signal
+# that the snapshot is done rather than merely started.
 snapshot_done=0
 for i in $(seq 1 60); do
-  hw=$(depth qc.order_items)
+  hw=$(depth qc.qc.order_items)
   [ "$hw" -ge 54635 ] 2>/dev/null && { echo "   snapshot complete: $hw records"; snapshot_done=1; break; }
   printf "   %ds — order_items: %s / 54635\r" $((i*5)) "$([ "$hw" = "-1" ] && echo "topic missing" || echo "$hw")"
   sleep 5
