@@ -525,6 +525,47 @@ being declared, which is what gives per-mechanism credit attribution through
 | `VALIDATION_MODE` on the backfill | Moved to a genuinely malformed file | Mutually exclusive with `MATCH_BY_COLUMN_NAME` - Snowflake treats the column match as a transform |
 | Compose as written | Named volumes `pgdata`, `rpdata` | `docker compose down -v` destroyed a hand-produced topic with no way to re-snapshot it |
 
+### CORE as built — Part 7
+
+| Object | Rows | Mechanism |
+|---|---|---|
+| `CORE.ORDER_STATUS_EVENT` | 78,874 | `QUALIFY ROW_NUMBER()` on `event_id`, from 79,663 |
+| `CORE.ORDER_HEADER` and six more | 171,403 source rows | CDC envelope shredded, keyed on `COALESCE(after, before)` |
+| `CORE.DIM_PRODUCT` | 220 | SCD2, two-part `MERGE`, 200 current + 20 closed |
+| `CORE.ORDER_FUNNEL` | 19,029 | `MATCH_RECOGNIZE`, `PATTERN (P K U D)` |
+| `CORE.ORDER_CANCELLED` | 623 | `MATCH_RECOGNIZE`, `PATTERN (P K? C)` |
+| `CORE.ORDER_LIFECYCLE_ANOMALY` | 348 | neither pattern; classified by status set |
+
+**Mechanisms 1, 2 and 3 carry identical event sets.** Set difference in both
+directions returns 0 for all three pairs. Asserted since Part 3, tested in Part
+7, and it is what makes taking v4 as canonical defensible rather than merely
+convenient.
+
+`RAW` had no dimension sources before Part 7. Only `qc.order_status` had ever
+been consumed and that topic is hand-produced rather than captured; the seven
+Debezium topics had been sitting unconsumed since Part 3. A second sink
+connector landed them, with its own consumer group so the Part 3 benchmark
+tables stayed exactly as measured.
+
+### CDC type surprises, measured
+
+| Postgres | Arrives as | Correct cast |
+|---|---|---|
+| `TIMESTAMP` | VARCHAR, ISO-8601 | `TO_TIMESTAMP_NTZ(x::STRING)` |
+| `DATE` | INTEGER, days since epoch | `DATEADD(day, x::INT, '1970-01-01')` |
+
+Same connector, same settings. `20353` is `2025-09-22`, and `::DATE` on it
+yields 1970 without raising.
+
+### Streams — all five types exist
+
+`CORE.STR_PRODUCT_CHANGES` standard · `CORE.STR_EVENTS_APPEND` append-only ·
+`RAW.STR_SETTLEMENT_NEWFILES` insert-only · `RAW.STR_DOCS_NEWFILES` directory
+table · `CORE.STR_ORDER_ENRICHED` on a view.
+
+A stream on a view requires `CHANGE_TRACKING` set explicitly on every underlying
+table; a stream on a table enables it implicitly.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
@@ -545,7 +586,7 @@ being declared, which is what gives per-mechanism credit attribution through
 - **A native arm64 interpreter.** Mechanisms 13 and 14 sidestepped it by running
   in containers, as mechanism 2 did. Part 9 cannot: Snowpark and
   `snowflake-ml-python` want to be on the Mac itself.
-- **Everything downstream of `RAW`.** Parts 6-17.
+- **Everything downstream of `CORE`.** `MART`, `SERVE` and `LAB` are empty.
 
 ---
 

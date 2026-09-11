@@ -4,7 +4,7 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. No transformation built yet.**
+**Status: ingestion complete at 13 of 14 routes. Cleaning and conformance complete.**
 
 ---
 
@@ -144,15 +144,35 @@ Route 11 is refused by the account tier. See §10.
 
 ## 7. Data currently in the platform
 
-| Category | Rows |
-|---|---|
-| Stored in `RAW` | **376,808** across 14 tables |
-| Queried in place, never copied | 2,800 |
-| Read live from a publisher, never stored | 15,683 |
-| In `CORE`, `MART`, `SERVE`, `LAB` | **0** |
+| Layer | Rows | Contents |
+|---|---|---|
+| `RAW` | ~548,000 | 21 tables, exactly as arrived. Includes 171,403 CDC rows |
+| `CORE` | 270,497 | 12 tables, typed, deduplicated, versioned |
+| Queried in place | 2,800 | Partner files, never copied |
+| Read live from a publisher | 15,683 | Marketplace share, never stored |
+| `MART`, `SERVE`, `LAB` | **0** | Not started |
 
-The three order-status tables hold the same 79,663 events. That triplication is
-by design and is resolved in `CORE`, which is not built.
+`CORE` in detail:
+
+| Table | Rows | Note |
+|---|---|---|
+| `INVENTORY_DAILY` | 96,000 | store × product × day |
+| `ORDER_STATUS_EVENT` | 78,874 | deduplicated from 79,663 |
+| `ORDER_ITEM` | 54,635 | |
+| `ORDER_HEADER` | 20,000 | |
+| `ORDER_FUNNEL` | 19,029 | complete lifecycles |
+| `ORDER_CANCELLED` | 623 | |
+| `ORDER_LIFECYCLE_ANOMALY` | 348 | defective sequences, classified |
+| `DIM_PRODUCT` | 220 | 200 current + 20 historical versions |
+| `CUSTOMER` / `PRODUCT` / `RIDER` / `STORE` | 500 / 200 / 60 / 8 | |
+
+Every order appears in exactly one of funnel, cancelled or anomaly:
+**19,029 + 623 + 348 = 20,000**.
+
+The three order-status tables in `RAW` still hold the same events three times
+over. That is deliberate — it is what makes the ingestion comparison valid — and
+`CORE` resolves it by taking one as canonical, which is defensible because all
+three were proved to carry identical event sets.
 
 ---
 
@@ -220,7 +240,7 @@ rider assignment. The route is kept in the repository as design, not deleted.
 | Object storage and access | Complete |
 | Warehouse foundation | Complete |
 | **Ingestion** | **Complete — 13 of 14 routes** |
-| Cleaning and conformance (`CORE`) | Not started |
+| **Cleaning and conformance** (`CORE`) | **Complete** |
 | Dimensional model (`MART`) | Not started |
 | Risk scoring | Not started |
 | Forecasting and text analysis | Not started |
