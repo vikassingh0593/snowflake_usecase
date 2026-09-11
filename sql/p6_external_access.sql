@@ -9,8 +9,34 @@
 -- default and the network rule is the only thing that opens it, for exactly
 -- these two hosts, for exactly the functions that name the integration.
 --
--- PREREQUISITE: mechanism 13 (scripts/p6_pandas_run.sh) must have run.
--- RAW.DIM_STORE_SEED is where the coordinates come from.
+-- BLOCKED ON THIS ACCOUNT — 2026-09-11
+--
+--   CREATE EXTERNAL ACCESS INTEGRATION EAI_OPEN_METEO
+--   509009 (0A000): External access is not supported for trial accounts.
+--
+-- Read what DID succeed, because it is the precise shape of the wall:
+--
+--   CREATE NETWORK RULE     NR_OPEN_METEO        -> created
+--   CREATE SECRET           SEC_WEATHER_CLIENT   -> created
+--   CREATE EXTERNAL ACCESS INTEGRATION           -> refused
+--
+-- The building blocks are Enterprise features and they work. What is gated is
+-- the object that BINDS a rule and a secret to a function -- which is the only
+-- thing that actually opens egress. Nothing here is a permissions problem and
+-- no rework gets around it; the account type is the constraint.
+--
+-- STEPS 1 to 3 are left runnable because the two objects that do build are
+-- worth having built: they are the evidence, and they cost nothing to hold.
+-- STEPS 4 onward cannot run and are kept as the design, not as dead code --
+-- the same treatment Snowflake Datastream gets in ARCHITECTURE section 5.
+--
+-- This is the third account-type finding, after Cortex AI functions being
+-- unavailable and the account nonetheless being Enterprise-shaped. Two of the
+-- three are trial-account gates on capabilities that are not edition features.
+--
+-- PREREQUISITE, when the account is no longer a trial: mechanism 13
+-- (scripts/p6_pandas_run.sh) must have run. RAW.DIM_STORE_SEED is where the
+-- coordinates come from.
 --
 -- COST: resumes WH_TRANSFORM_XS. Eight HTTPS calls, ~800 KB of JSON, flattened
 -- to ~17,800 rows. Estimate 0.01-0.02 credits. Open-Meteo's free tier is
@@ -59,6 +85,8 @@ CREATE OR REPLACE SECRET LAND.SEC_WEATHER_CLIENT
 
 -- =============================================================================
 -- STEP 3 — the integration. Rules and secrets are inert until one names them.
+--
+-- *** THIS IS THE WALL. Everything from here fails on a trial account. ***
 -- =============================================================================
 CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION EAI_OPEN_METEO
   ALLOWED_NETWORK_RULES = (LAND.NR_OPEN_METEO)

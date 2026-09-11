@@ -239,6 +239,77 @@ class of data, two mechanisms, two levels of care.
 
 ---
 
+## Session 3 — 2026-09-11
+
+### Mechanism 10 done, mechanism 11 blocked. 13 of 14 is the ceiling.
+
+| # | Mechanism | Result |
+|---|---|---|
+| 10 | Directory table + `pypdf` UDF | `RAW.COMPLAINT_DOC`, 300 docs, 0 failures, avg 320 chars |
+| 11 | External access to Open-Meteo | **refused**: `509009 External access is not supported for trial accounts` |
+
+### The Anaconda gate never existed
+
+Two sessions of planning said mechanisms 10 and 11 were blocked on accepting the
+Anaconda Terms of Service. There is no such section on this account's Billing &
+Terms page. `sql/p6_pkg_probe.sql` settled it the way Part 2 settled the
+Enterprise question -- by attempting the `CREATE` rather than reading a
+catalogue: `pypdf 6.18.0` and `requests 2.34.2` both compiled **and executed**.
+
+`INFORMATION_SCHEMA.PACKAGES` listing a package is necessary and not sufficient;
+it says what the channel carries, not what the account may compile against. The
+only conclusive test is a function that runs.
+
+Runtimes 3.8 through 3.14 are all available. The UDFs pin 3.11 anyway, because
+that is the one an execution proved -- swapping in an unverified variable
+immediately before the run that depends on it trades a known-good for nothing.
+
+### Finding 3: external access is a trial gate, not an edition limit
+
+The shape of the failure is the useful part:
+
+| Object | Result |
+|---|---|
+| `CREATE NETWORK RULE` | created |
+| `CREATE SECRET` | created |
+| `CREATE EXTERNAL ACCESS INTEGRATION` | **refused** |
+
+Both building blocks work. What is gated is the object that binds a rule and a
+secret to a function -- the only one that actually opens egress. **On a trial
+account `SHOW GRANTS` will never explain why something does not work.**
+
+Weather was mechanism 11's payload, not a dependency: the risk features in §10
+are distance, hour, store load, basket size and rider. Nothing downstream is
+blocked. `sql/p6_external_access.sql` runs as far as the wall and stops, kept as
+design rather than dead code -- the same treatment Snowflake Datastream gets.
+
+### Four bugs in one mechanism, all mine
+
+| Bug | What happened |
+|---|---|
+| `FILE_MODIFIED TIMESTAMP_LTZ` | `DIRECTORY()` returns `LAST_MODIFIED` as `TIMESTAMP_TZ(3)` and Snowflake will not implicitly convert. Matching the source type is also right: that offset is Azure's, and `RAW` holds what arrived |
+| A stream used as a backfill | `CREATE OR REPLACE STREAM` starts at the current offset. With all 300 files already registered, `REFRESH` -- idempotent -- had nothing to announce, so the fresh stream was empty and the load silently inserted 0 rows. **A stream is the delta, never the backfill** |
+| `missing_header = 0` on an empty table | The check counted rows NOT matching, so emptiness scored perfectly. Now asserts `docs = with_header AND docs > 0` |
+| `REGEXP_LIKE(BODY, '.*Order [0-9]+.*')` = 0 | `REGEXP_LIKE` is implicitly anchored to the whole string -- a match, not a search -- and `.` does not cross a newline without the `s` parameter. Every body is multi-line. `REGEXP_SUBSTR` searches, and now extracts the id so the check is falsifiable against the 1..20000 range |
+
+Two of those four were false greens in my own verification SQL. The standing
+rule of this project -- *a green status field has been wrong every time* -- now
+extends to a count of zero, which is a status field wearing a number's clothes.
+
+The backfill is now an anti-join on `(RELATIVE_PATH, MD5)`. MD5 rather than path
+alone, so a file the partner **replaces** is reprocessed and an unchanged one is
+skipped: content addressing the directory table hands over for free.
+
+### Also
+
+`SAMPLE` is reserved -- it is the table-sampling clause. Third collision after
+`rows` and `check`.
+
+Azure Cloud Shell is ephemeral. The clone does not survive a session; re-clone
+rather than pull.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -301,21 +372,22 @@ The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
 (`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
 rather than by `SHOW`.
 
-### 3. Then: mechanisms 10 and 11
+### 3. Ingestion is closed at 13 of 14
 
-Both are written. Both wait on the same gate.
+Nothing is left to run in the ingestion stage. Mechanism 11 is not deferred, it
+is unavailable: external access is refused on a trial account and no rework
+reaches it. `sql/p6_external_access.sql` stops at the wall by design.
 
-| Gate | Fix |
-|---|---|
-| **Anaconda terms not accepted** | Snowsight -> Admin -> Billing & Terms -> Anaconda -> Enable, as ORGADMIN. `pypdf` and `requests` are third-party packages, so `CREATE FUNCTION ... PACKAGES=` fails outright. STEP 0 of `sql/p6_directory_docs.sql` returns zero rows until it is done |
+Next is **Part 6 — `CORE`**: dedupe, SCD2, conformance. The first job is the one
+`RAW` deliberately did not do. Three tables hold the same 79,663 events, and
+within each there is a 1% duplicate rate and 2% out-of-order transitions the
+generator injected on purpose.
 
-| # | Run | Where |
-|---|---|---|
-| 10 | `scripts/p6_complaints.sh`, then `sql/p6_directory_docs.sql` | Cloud Shell, then `snow sql` |
-| 11 | `sql/p6_external_access.sql` | `snow sql` |
-
-11 reads coordinates from `RAW.DIM_STORE_SEED`, which mechanism 13 has now
-loaded, so the ordering constraint is satisfied.
+Carry one lesson from mechanism 10 straight into it: **a stream is the delta,
+never the backfill.** `CORE` gets streams over `RAW`, and the same split applies
+-- backfill the history once from the table, then let the stream carry what
+arrives after. `CREATE OR REPLACE STREAM` resets the offset and is how the 300
+pending files were lost.
 
 ### Row counts as they stand
 
@@ -329,14 +401,16 @@ loaded, so the ordering constraint is satisfied.
 | `RAW.ORDER_BACKFILL` | 40,000 | 6, 7 |
 | `RAW.ORDER_BADFILE_TEST` | 200 | 6 |
 | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | 9 |
+| `RAW.COMPLAINT_DOC` | 300 | 10 |
 | `RAW.DIM_STORE_SEED` | 8 | 13 |
 | `RAW.CATEGORY_HIERARCHY` | 23 | 14 |
 | `RAW.SLA_THRESHOLD` | 32 | 14 |
 | `RAW.COMPLAINT_REASON_CODE` | 10 | 14 |
 | `RAW.COMPLAINT_LABEL` | 60 | 14 |
-| | **376,508 stored** | |
+| | **376,808 stored** | |
 | `RAW.EXT_SETTLEMENT` | 2,800 | 8 - read in place, not stored |
 | `RAW.V_FX_INR_USD` | 15,683 | 12 - a view over a share, nothing copied |
+| — | — | 11 - blocked, trial account |
 
 `CORE`, `MART`, `SERVE` and `LAB` are empty. Nothing has been deduped: the three
 order-status tables hold the same 79,663 events three times over by design, and

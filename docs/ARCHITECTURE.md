@@ -9,7 +9,7 @@ purpose — if a step needs more than a few hundred MB, the design is wrong.
 
 ---
 
-## 1. Account facts and the two findings that shaped this
+## 1. Account facts and the three findings that shaped this
 
 | Item | Value |
 |---|---|
@@ -45,6 +45,38 @@ returns an empty set is not proof.
 project now does its most interesting work, and it is stronger than the AI layer would
 have been: every control is built twice, the Enterprise way and the Standard way, and
 compared.
+
+---
+
+
+### Finding 3 — external access is blocked, and the block is not about edition
+
+`CREATE EXTERNAL ACCESS INTEGRATION` returns `509009 (0A000): External access is
+not supported for trial accounts.` Mechanism 11 cannot be built here.
+
+The shape of the failure is the useful part:
+
+| Object | Result |
+|---|---|
+| `CREATE NETWORK RULE NR_OPEN_METEO` | created |
+| `CREATE SECRET SEC_WEATHER_CLIENT` | created |
+| `CREATE EXTERNAL ACCESS INTEGRATION` | **refused** |
+
+Both building blocks are Enterprise features and both work. What is gated is the
+object that binds a rule and a secret to a function — the only one that actually
+opens egress. So this is not an edition limit dressed up as a trial limit, and
+it is not a grant that was missed. Two of the three findings on this account are
+trial gates on capabilities that are not edition features at all, which is worth
+stating plainly: **on a trial account, `SHOW GRANTS` will never explain why
+something does not work.**
+
+Mechanism 11 stays in the repo as design rather than dead code, the same
+treatment Snowflake Datastream gets in §5. `sql/p6_external_access.sql` runs as
+far as the wall and stops there.
+
+Weather per store was mechanism 11's payload, not a dependency of anything
+downstream — §10's risk features are distance, hour, store load, basket size and
+rider. Nothing else is blocked by this.
 
 ---
 
@@ -448,7 +480,7 @@ SYSTEM$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')
 `LIST @STG_LANDING` returns zero rows. That is the success case: an empty
 container listed without an authorisation error proves the credential works.
 
-### Ingestion as built — 12 of 14
+### Ingestion as built — 13 of 14
 
 | # | Target | Rows | Note |
 |---|---|---|---|
@@ -461,12 +493,14 @@ container listed without an authorisation error proves the credential works.
 | 7 | same table | +1 column | `COUPON_CODE` added by the v2 load |
 | 8 | `RAW.EXT_SETTLEMENT` | 2,800 | external table, 7 daily files, partitioned on the filename date. Not stored |
 | 9 | `RAW.ORDER_EVENTS_ICEBERG` | 79,038 | `ICEBERG_VERSION = 3` at create; 625 rows deleted into a deletion vector |
+| 10 | `RAW.COMPLAINT_DOC` | 300 | directory table + `pypdf` UDF; 0 extraction failures, avg 320 chars |
+| 11 | — | — | **blocked**: external access is refused on a trial account. See §1 Finding 3 |
 | 12 | `RAW.V_FX_INR_USD` | 15,683 | a VIEW over share `MARKETPLACE_PUBLIC_DATA_FREE`. Zero bytes local |
 | 13 | `RAW.DIM_STORE_SEED` | 8 | `write_pandas`, `auto_create_table`, types from the dtypes |
 | 14 | 4 seed tables | 125 | `dbt build`, `PASS=19 ERROR=0` |
 | - | `RAW.ORDER_BADFILE_TEST` | 200 | 203 parsed, 3 rejected, all three named by `VALIDATE()` |
 
-**376,508 rows stored**, plus 2,800 queried in place and 15,683 read live from a
+**376,808 rows stored**, plus 2,800 queried in place and 15,683 read live from a
 share. `CORE`, `MART`, `SERVE` and `LAB` are empty.
 
 Mechanism 12's listing is `FINANCE__ECONOMICS`, schema **`PUBLIC_DATA_FREE`** —
@@ -500,11 +534,14 @@ being declared, which is what gives per-mechanism credit attribution through
   -> Admin -> Cost Management -> Budgets, 80 credits.
 - **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
   catches up (~3 h). 3.78 credits predates Parts 3-5 entirely.
-- **Mechanisms 10 and 11** - directory table over complaint PDFs, and external
-  network access to Open-Meteo. Both blocked on the same gate: the Anaconda
-  Terms of Service are not accepted, so `CREATE FUNCTION ... PACKAGES=('pypdf')`
-  and `('requests')` fail outright. ORGADMIN, Snowsight -> Admin -> Billing &
-  Terms -> Anaconda -> Enable.
+- **Mechanism 11 only, and not by choice.** External access is refused on a
+  trial account (§1 Finding 3). 13 of 14 is the ceiling here.
+- **The Anaconda gate does not exist on this account.** It was assumed to block
+  mechanisms 10 and 11 and there is no such setting on Billing & Terms.
+  `sql/p6_pkg_probe.sql` settled it by CREATE rather than by SHOW: `pypdf 6.18.0`
+  and `requests 2.34.2` both compiled and executed. Python runtimes 3.8 through
+  3.14 are available; UDFs here pin 3.11 because that is the one a real
+  execution proved.
 - **A native arm64 interpreter.** Mechanisms 13 and 14 sidestepped it by running
   in containers, as mechanism 2 did. Part 9 cannot: Snowpark and
   `snowflake-ml-python` want to be on the Mac itself.
