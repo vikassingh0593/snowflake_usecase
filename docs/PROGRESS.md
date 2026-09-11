@@ -360,11 +360,31 @@ column is wrong, and on the date column it silently yields 1970.
 
 | Observed | Source truth |
 |---|---|
+| **16.45% SLA breach**, recomputed from the event stream | generator's target 16.4% |
+| **0 orders** where event-derived delivery disagrees with the header | the application's own column, to the second |
 | 0.99% duplicates removed | generator's `DUP_RATE = 0.01` |
 | 1.8% lifecycle anomalies | `ANOMALY_RATE = 0.02`, minus short cancellations |
 | 19,377 delivered + 623 cancelled = 20,000 | timestamp nulls agree with the status column |
 | 0 money mismatches over 20,000 orders | paise as integers, through six hops |
 | `PICKED_UP` 19,281 < `DELIVERED` 19,377 | 96 skipped transitions, visible in a `GROUP BY` |
+
+### The anomaly split, and one that got away
+
+188 `SKIPPED_TRANSITION` against 160 `OUT_OF_ORDER`. The generator chooses
+between them on a fair coin, so the gap is worth a look rather than a shrug.
+
+The likely cause is that the two defects are not equally detectable. A skipped
+transition is always visible — the status is simply absent. An out-of-order
+defect shifts one step's timestamp forward by nine minutes, and if the next step
+was already more than nine minutes later, the sequence does not actually
+reorder. Delivery legs run ten to twenty-five minutes, so some proportion of
+those shifts leave a perfectly ordered lifecycle behind and nothing for a
+pattern to catch.
+
+**UNVERIFIED**, and settleable: compare the injected anomaly count from the
+generator against 348. If the generator injected roughly 380, the missing ~30
+are shifts that failed to reorder anything — which is a real limit of
+sequence-based detection, not a bug in the pattern.
 
 ### All five stream types now exist
 
