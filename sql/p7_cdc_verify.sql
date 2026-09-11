@@ -65,9 +65,18 @@ SELECT 'inventory'   AS src, OBJECT_KEYS(RECORD_CONTENT:after) AS cols FROM CDC_
 -- =============================================================================
 -- 4 — how the values are typed on the way through.
 --
--- decimal.handling.mode = string and time.precision.mode = connect in the
--- Debezium config, so money and timestamps do NOT arrive as you might expect.
--- These two rows decide how CORE casts every column of every table.
+-- MEASURED 2026-09-11, and worth reading twice:
+--
+--   order_id, order_total_paise   INTEGER   -- paise are INT in Postgres, so
+--                                              decimal.handling.mode never applies
+--   placed_ts, created_at         VARCHAR   -- ISO-8601 string
+--   lat, lon                      DECIMAL
+--   opened_on, joined_on,         INTEGER   -- DAYS SINCE EPOCH. 20353 = 2025-09-15.
+--   snapshot_date                            time.precision.mode = connect
+--
+-- TIMESTAMP arrives as a string and DATE arrives as an integer, from the same
+-- connector with the same settings. A `::DATE` on either is wrong: dates need
+-- DATEADD(day, n, '1970-01-01') and timestamps need TO_TIMESTAMP_NTZ.
 -- =============================================================================
 SELECT RECORD_CONTENT:after:order_id          AS order_id,
        TYPEOF(RECORD_CONTENT:after:order_id)  AS t_order_id,
@@ -100,9 +109,15 @@ GROUP  BY 1 ORDER BY 2 DESC;
 -- A snapshot read has no before-image by definition. This is the number that
 -- says whether SCD2 has anything to compare against yet, or whether a change
 -- has to be made in Postgres first to produce one.
-SELECT COUNT(*)                                        AS rows_total,
-       SUM(IFF(RECORD_CONTENT:before IS NULL, 1, 0))   AS no_before_image,
-       SUM(IFF(RECORD_CONTENT:after  IS NULL, 1, 0))   AS no_after_image
+-- IS_NULL_VALUE, not IS NULL. A JSON null inside a VARIANT is a VALUE whose
+-- type is null -- it is not SQL NULL, so `RECORD_CONTENT:before IS NULL`
+-- returns FALSE for every one of these rows and the count comes back 0 while
+-- the sample above plainly shows "before": null. IS_NULL_VALUE is the test that
+-- distinguishes a JSON null from an absent key.
+SELECT COUNT(*)                                                AS rows_total,
+       SUM(IFF(IS_NULL_VALUE(RECORD_CONTENT:before), 1, 0))    AS json_null_before,
+       SUM(IFF(RECORD_CONTENT:before IS NULL, 1, 0))           AS sql_null_before,
+       SUM(IFF(IS_NULL_VALUE(RECORD_CONTENT:after), 1, 0))     AS json_null_after
 FROM   CDC_CUSTOMERS;
 
 -- =============================================================================
