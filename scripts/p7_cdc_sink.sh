@@ -20,6 +20,8 @@
 # That before-image is the whole reason CDC beats a nightly extract for SCD2,
 # and unwrapping it at ingest would throw away the only copy.
 #
+#   bash scripts/p7_cdc_sink.sh diagnose  where the data actually is. Read-only
+#   bash scripts/p7_cdc_sink.sh resnapshot force Debezium to snapshot again
 #   bash scripts/p7_cdc_sink.sh check     topic sizes, register nothing
 #   bash scripts/p7_cdc_sink.sh create    register the sink
 #   bash scripts/p7_cdc_sink.sh status
@@ -46,15 +48,83 @@ NAME="qc-snowflake-cdc-v4"
 TOPICS="qc.dark_stores,qc.customers,qc.products,qc.riders,qc.inventory,qc.orders,qc.order_items"
 MAP="qc.dark_stores:CDC_DARK_STORES,qc.customers:CDC_CUSTOMERS,qc.products:CDC_PRODUCTS,qc.riders:CDC_RIDERS,qc.inventory:CDC_INVENTORY,qc.orders:CDC_ORDERS,qc.order_items:CDC_ORDER_ITEMS"
 
-cmd="${1:-check}"
+cmd="${1:-diagnose}"
 
 case "$cmd" in
+diagnose)
+  # Read-only. Answers one question in order: is the data in Postgres, is it in
+  # the broker, and is the connector doing anything about it.
+  echo "== 1. Postgres — does the source still hold the rows?"
+  docker exec qc-postgres psql -U postgres -d qcommerce -tA -c "
+    SELECT 'dark_stores', COUNT(*) FROM qc.dark_stores
+    UNION ALL SELECT 'customers',   COUNT(*) FROM qc.customers
+    UNION ALL SELECT 'products',    COUNT(*) FROM qc.products
+    UNION ALL SELECT 'riders',      COUNT(*) FROM qc.riders
+    UNION ALL SELECT 'inventory',   COUNT(*) FROM qc.inventory
+    UNION ALL SELECT 'orders',      COUNT(*) FROM qc.orders
+    UNION ALL SELECT 'order_items', COUNT(*) FROM qc.order_items;" \
+    2>/dev/null || echo "  could not query qc schema"
+
+  echo
+  echo "== 2. Broker — which topics exist"
+  docker exec qc-redpanda rpk topic list
+
+  echo
+  echo "== 3. Replication slot and publication"
+  # A slot that exists with no Connect offsets is the state that matters: the
+  # slot holds a WAL position, but Debezium decides whether to snapshot from
+  # ITS OWN offsets, and _connect_offsets is absent. Dropping the slot makes
+  # that unambiguous rather than relying on it.
+  docker exec qc-postgres psql -U postgres -d qcommerce -c \
+    "SELECT slot_name, plugin, active, restart_lsn FROM pg_replication_slots;" 2>/dev/null
+  docker exec qc-postgres psql -U postgres -d qcommerce -c \
+    "SELECT pubname FROM pg_publication;" 2>/dev/null
+
+  echo "== 4. Connectors registered"
+  curl -s "$CONNECT/connectors" | python3 -m json.tool
+  echo
+  echo "== 5. Why the source connector is not producing"
+  # UNASSIGNED means the worker has not given the connector to anyone. The task
+  # underneath can still report RUNNING, which is the same green-status-field
+  # lie this project has hit at every stage.
+  docker logs qc-connect 2>&1 | grep -iE "qc-postgres-cdc|snapshot|replication slot|ERROR" \
+    | tail -20 || true
+  ;;
+
+resnapshot)
+  # DESTRUCTIVE on the local stack only: deletes the source connector and drops
+  # its replication slot so Debezium starts clean. Postgres table data is not
+  # touched. Nothing in Azure or Snowflake is touched.
+  echo "== deleting the source connector"
+  curl -s -X DELETE "$CONNECT/connectors/qc-postgres-cdc" || true
+  sleep 3
+
+  echo "== dropping the replication slot so snapshot.mode=initial actually snapshots"
+  docker exec qc-postgres psql -U postgres -d qcommerce -c \
+    "SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE slot_name = 'qc_slot';"
+
+  echo "== re-registering Debezium"
+  curl -s -X POST -H "Content-Type: application/json" \
+       --data @source/connectors/debezium-postgres.json \
+       "$CONNECT/connectors" | python3 -m json.tool
+
+  echo
+  echo "Snapshotting 171,403 rows takes a minute or two. Then:"
+  echo "  bash scripts/p7_cdc_sink.sh check"
+  ;;
+
 check)
   echo "== Debezium topics and their depths"
   # High watermark per partition. A topic at 0 means the snapshot never ran or
   # the volume was destroyed -- register nothing until this looks right.
-  docker exec qc-redpanda rpk topic describe -p $(echo "$TOPICS" | tr ',' ' ') 2>/dev/null \
-    || docker exec qc-redpanda rpk topic list
+  # Per topic, so one missing topic does not abort the whole report. rpk exits
+  # nonzero on UNKNOWN_TOPIC_OR_PARTITION, which would otherwise hide the rest.
+  for t in $(echo "$TOPICS" | tr ',' ' '); do
+    printf "  %-20s " "$t"
+    docker exec qc-redpanda rpk topic describe -p "$t" 2>/dev/null \
+      | awk '/^[0-9]/ {hw=$NF} END {print (hw == "" ? "MISSING" : hw " records")}' \
+      || echo "MISSING"
+  done
   echo
   echo "Expect roughly: dark_stores 8 · customers 500 · products 200 · riders 60"
   echo "                inventory 96,000 · orders 20,000 · order_items 54,635"
@@ -115,5 +185,5 @@ delete)
   curl -s -X DELETE "$CONNECT/connectors/$NAME" && echo "deleted $NAME"
   ;;
 
-*) echo "usage: $0 check|create|status|delete"; exit 1 ;;
+*) echo "usage: $0 diagnose|resnapshot|check|create|status|delete"; exit 1 ;;
 esac
