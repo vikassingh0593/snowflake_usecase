@@ -310,6 +310,92 @@ rather than pull.
 
 ---
 
+## Part 7 — CORE, complete
+
+### What CORE holds
+
+| Table | Rows | Built by |
+|---|---|---|
+| `ORDER_STATUS_EVENT` | 78,874 | dedupe with `QUALIFY`, from 79,663 |
+| `INVENTORY_DAILY` | 96,000 | CDC conformance |
+| `ORDER_ITEM` | 54,635 | CDC conformance |
+| `ORDER_HEADER` | 20,000 | CDC conformance |
+| `ORDER_FUNNEL` | 19,029 | `MATCH_RECOGNIZE`, clean lifecycle |
+| `ORDER_CANCELLED` | 623 | `MATCH_RECOGNIZE`, `PATTERN (P K? C)` |
+| `ORDER_LIFECYCLE_ANOMALY` | 348 | everything neither pattern claimed |
+| `CUSTOMER` / `PRODUCT` / `RIDER` / `STORE` | 500 / 200 / 60 / 8 | CDC conformance |
+| `DIM_PRODUCT` | 220 | SCD2 `MERGE` — 200 current, 20 closed |
+
+**19,029 + 623 + 348 = 20,000.** Three tables partition every order exactly
+once, which is the check that makes the pattern matching trustworthy rather
+than merely plausible.
+
+### The prerequisite nobody planned for
+
+`RAW` had no customers, products, riders, orders, order items or inventory.
+Part 3 consumed one topic, `qc.order_status`, and that topic is hand-produced
+rather than captured — the seven Debezium topics carrying the operational
+database's actual tables had been sitting unconsumed since then. CORE cannot
+conform a customer dimension that does not exist, so Part 7 began by landing
+them: a second sink connector, its own consumer group, 171,403 rows.
+
+The envelope stays whole. No `ExtractNewRecordState` transform is configured, so
+every record carries `before`, `after`, `op`, `source` and `ts_ms`. That
+before-image is the entire reason CDC beats a nightly extract for SCD2.
+
+### Types that do not arrive as written
+
+Measured, not assumed, and two of the three are counter-intuitive:
+
+| Postgres type | Arrives as | Cast |
+|---|---|---|
+| `TIMESTAMP` | VARCHAR, ISO-8601 | `TO_TIMESTAMP_NTZ(x::STRING)` |
+| `DATE` | **INTEGER, days since epoch** | `DATEADD(day, x::INT, '1970-01-01')` |
+| `INT`, money in paise | INTEGER | `::NUMBER` |
+
+Same connector, same settings, and `20353` is `2025-09-22`. A `::DATE` on either
+column is wrong, and on the date column it silently yields 1970.
+
+### Numbers that fell out rather than being asserted
+
+| Observed | Source truth |
+|---|---|
+| 0.99% duplicates removed | generator's `DUP_RATE = 0.01` |
+| 1.8% lifecycle anomalies | `ANOMALY_RATE = 0.02`, minus short cancellations |
+| 19,377 delivered + 623 cancelled = 20,000 | timestamp nulls agree with the status column |
+| 0 money mismatches over 20,000 orders | paise as integers, through six hops |
+| `PICKED_UP` 19,281 < `DELIVERED` 19,377 | 96 skipped transitions, visible in a `GROUP BY` |
+
+### All five stream types now exist
+
+| Type | Object | Why that one |
+|---|---|---|
+| Standard | `CORE.STR_PRODUCT_CHANGES` | SCD2 needs the before-image |
+| Append-only | `CORE.STR_EVENTS_APPEND` | events are never updated; no reason to pay for before-images |
+| Insert-only | `RAW.STR_SETTLEMENT_NEWFILES` | the only mode an external table supports |
+| Directory table | `RAW.STR_DOCS_NEWFILES` | arrival triggers parsing |
+| On a view | `CORE.STR_ORDER_ENRICHED` | change tracking without materialising |
+
+A stream on a view needs `CHANGE_TRACKING` set explicitly on every underlying
+table. A stream on a table enables it implicitly; a stream on a view does not.
+
+### Six failures, and what each one looked like
+
+| Failure | Why it was hard to see |
+|---|---|
+| Seven empty topics beside seven full ones | Debezium writes `qc.qc.orders`, not `qc.orders`. Subscribing to a topic that does not exist is not an error — the broker auto-creates it and the connector reports RUNNING with nothing to read |
+| `depth()` reported MISSING for full topics | rpk v24 names the column `HIGH-WATERMARK`, not `LOG-END-OFFSET`. Three versions of that function collapsed "empty" and "absent" into the same answer |
+| `no_before_image = 0` with `"before": null` visible | A JSON null inside a VARIANT is a value whose type is null, not SQL NULL. `IS NULL` returns FALSE; `IS_NULL_VALUE` is the test |
+| SCD2 produced 200 rows and 0 closed versions | The seed ran after the MERGE had already applied the new prices, so version 1 recorded the new value. Indistinguishable from a dimension that has not changed |
+| `invalid identifier 'SECOND'` | Inside `MEASURES`, names resolve against pattern variables first, so the bare date part is read as a column. Quote it |
+| The private key in terminal scrollback | Connect echoes the whole config back on a successful POST. The script piped it to stdout. Key rotated; output now redacted |
+
+**The count of zero is a status field wearing a number's clothes.** Four of
+those six reported a plausible number rather than an error, and two were false
+greens in verification SQL rather than in the data.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
