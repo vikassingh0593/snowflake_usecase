@@ -50,10 +50,14 @@ MATCH_RECOGNIZE (
     FIRST(K.EVENT_TS)                                  AS PACKED_TS,
     FIRST(U.EVENT_TS)                                  AS PICKED_UP_TS,
     FIRST(D.EVENT_TS)                                  AS DELIVERED_TS,
-    DATEDIFF(second, FIRST(P.EVENT_TS), FIRST(K.EVENT_TS)) AS PACK_SEC,
-    DATEDIFF(second, FIRST(K.EVENT_TS), FIRST(U.EVENT_TS)) AS PICK_SEC,
-    DATEDIFF(second, FIRST(U.EVENT_TS), FIRST(D.EVENT_TS)) AS RIDE_SEC,
-    DATEDIFF(second, FIRST(P.EVENT_TS), FIRST(D.EVENT_TS)) AS TOTAL_SEC,
+    -- 'second' quoted. Inside MEASURES, names resolve against the pattern
+    -- variables first, so the bare date-part keyword is read as a column
+    -- identifier and fails with "invalid identifier 'SECOND'". A string literal
+    -- is unambiguous, and DATEDIFF accepts it everywhere.
+    DATEDIFF('second', FIRST(P.EVENT_TS), FIRST(K.EVENT_TS)) AS PACK_SEC,
+    DATEDIFF('second', FIRST(K.EVENT_TS), FIRST(U.EVENT_TS)) AS PICK_SEC,
+    DATEDIFF('second', FIRST(U.EVENT_TS), FIRST(D.EVENT_TS)) AS RIDE_SEC,
+    DATEDIFF('second', FIRST(P.EVENT_TS), FIRST(D.EVENT_TS)) AS TOTAL_SEC,
     COUNT(*)                                           AS STEPS
   ONE ROW PER MATCH
   AFTER MATCH SKIP PAST LAST ROW
@@ -83,7 +87,7 @@ MATCH_RECOGNIZE (
     FIRST(P.EVENT_TS)                                      AS PLACED_TS,
     FIRST(C.EVENT_TS)                                      AS CANCELLED_TS,
     COUNT(K.*)                                             AS WAS_PACKED,
-    DATEDIFF(second, FIRST(P.EVENT_TS), FIRST(C.EVENT_TS)) AS TO_CANCEL_SEC
+    DATEDIFF('second', FIRST(P.EVENT_TS), FIRST(C.EVENT_TS)) AS TO_CANCEL_SEC
   ONE ROW PER MATCH
   AFTER MATCH SKIP PAST LAST ROW
   PATTERN (P K? C)
@@ -163,7 +167,7 @@ LIMIT  6;
 SELECT COUNT(*)                                                  AS matched_orders,
        SUM(IFF(f.DELIVERED_TS > o.PROMISED_TS, 1, 0))            AS breached,
        ROUND(100.0 * SUM(IFF(f.DELIVERED_TS > o.PROMISED_TS, 1, 0)) / COUNT(*), 2) AS breach_pct,
-       SUM(IFF(ABS(DATEDIFF(second, f.DELIVERED_TS, o.DELIVERED_TS)) > 1, 1, 0))   AS header_vs_events_disagree
+       SUM(IFF(ABS(DATEDIFF('second', f.DELIVERED_TS, o.DELIVERED_TS)) > 1, 1, 0))   AS header_vs_events_disagree
 FROM   CORE.ORDER_FUNNEL f
 JOIN   CORE.ORDER_HEADER o USING (ORDER_ID);
 
