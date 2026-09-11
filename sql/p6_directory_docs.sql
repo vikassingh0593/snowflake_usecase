@@ -30,35 +30,29 @@ USE DATABASE QCOMMERCE;
 -- Zero rows back means the Anaconda terms have not been accepted. Stop here
 -- and accept them; everything below this point depends on it.
 -- =============================================================================
-SELECT PACKAGE_NAME, VERSION, LANGUAGE
+SELECT PACKAGE_NAME, RUNTIME_VERSION, MAX(VERSION) AS LATEST
 FROM   INFORMATION_SCHEMA.PACKAGES
 WHERE  LANGUAGE = 'python'
   AND  PACKAGE_NAME IN ('pypdf', 'snowflake-snowpark-python')
-ORDER  BY PACKAGE_NAME, VERSION DESC
-LIMIT  20;
+GROUP  BY PACKAGE_NAME, RUNTIME_VERSION
+ORDER  BY PACKAGE_NAME, RUNTIME_VERSION;
 
 -- =============================================================================
--- STEP 1 — the stream goes on BEFORE the refresh.
+-- STEP 1 — register the files.
 --
--- A directory table is metadata, not a listing: it does not notice a blob
--- until ALTER STAGE ... REFRESH reconciles it against the container. A stream
--- on the stage records exactly that reconciliation, which is why arrival can
--- trigger parsing rather than a schedule polling for work.
---
--- Fourth of the five stream types in this project. Insert-only by nature --
--- there is no such thing as an updated file here, only a new one.
+-- A directory table is metadata, not a listing: it does not notice a blob until
+-- ALTER STAGE ... REFRESH reconciles it against the container. REFRESH is
+-- idempotent -- a file already registered is not registered again -- which is
+-- exactly why it cannot be used to replay a load.
 -- =============================================================================
-CREATE OR REPLACE STREAM RAW.STR_DOCS_NEWFILES ON STAGE LAND.STG_DOCS;
-
 SELECT COUNT(*) AS files_before_refresh FROM DIRECTORY(@LAND.STG_DOCS);
 
 ALTER STAGE LAND.STG_DOCS REFRESH;
 
-SELECT COUNT(*) AS files_after_refresh  FROM DIRECTORY(@LAND.STG_DOCS);
-SELECT COUNT(*) AS rows_in_stream       FROM RAW.STR_DOCS_NEWFILES;
+SELECT COUNT(*) AS files_after_refresh FROM DIRECTORY(@LAND.STG_DOCS);
 
 -- What the directory table actually holds. Note MD5 and SIZE: content
--- addressing for free, which is how a re-uploaded file is told from a new one.
+-- addressing for free, which is how a replaced file is told from a new one.
 SELECT RELATIVE_PATH, SIZE, LAST_MODIFIED, MD5
 FROM   DIRECTORY(@LAND.STG_DOCS)
 ORDER  BY RELATIVE_PATH
@@ -110,16 +104,19 @@ ORDER  BY RELATIVE_PATH
 LIMIT  1;
 
 -- =============================================================================
--- STEP 3 — consume the stream into RAW.
+-- STEP 3 — backfill from the directory table, incrementally.
 --
--- Reading the stream inside a DML is what advances its offset. Selecting from
--- it does not. Run this twice and the second run inserts nothing, which is the
--- same at-least-once-into-exactly-once property the streaming mechanisms get
--- from offset tokens -- reached a completely different way.
+-- THE CORRECTION. This originally read from a stream, which worked exactly once
+-- and then silently loaded nothing. A stream captures changes from the moment
+-- it is created; on a stage whose files are already registered, a fresh stream
+-- is empty and REFRESH has nothing left to announce. A stream can therefore
+-- never be the backfill -- it is only ever the delta.
 --
--- The scoped URL is built and consumed in the same statement and never stored.
--- Persisting one would bake in a 24-hour expiry and a privilege snapshot.
--- =============================================================================
+-- The anti-join on (RELATIVE_PATH, MD5) is what makes this re-runnable. MD5
+-- rather than path alone, so a file the partner REPLACES is reprocessed while
+-- an unchanged one is skipped. That is the content addressing the directory
+-- table hands over for nothing.
+--
 -- FILE_MODIFIED is TIMESTAMP_TZ, not TIMESTAMP_LTZ. DIRECTORY() returns
 -- LAST_MODIFIED as TIMESTAMP_TZ(3) and Snowflake will not implicitly convert
 -- between the two on insert -- it raises "Expression type does not match column
@@ -128,10 +125,10 @@ LIMIT  1;
 -- offset the blob was written with, and RAW holds what arrived. LOAD_TS stays
 -- LTZ because that one is our clock.
 --
--- IF NOT EXISTS, not OR REPLACE: this table is filled from a stream and is
--- meant to be additive across runs, so replacing it would discard earlier
--- loads. The cost is that a column-type change needs an explicit drop first:
+-- IF NOT EXISTS, not OR REPLACE: the table is additive across runs. The cost is
+-- that a column-type change needs an explicit drop first:
 --   DROP TABLE IF EXISTS QCOMMERCE.RAW.COMPLAINT_DOC;
+-- =============================================================================
 CREATE TABLE IF NOT EXISTS RAW.COMPLAINT_DOC (
   TICKET_ID       STRING,
   RELATIVE_PATH   STRING,
@@ -144,17 +141,36 @@ CREATE TABLE IF NOT EXISTS RAW.COMPLAINT_DOC (
 );
 
 INSERT INTO RAW.COMPLAINT_DOC
-SELECT REGEXP_SUBSTR(RELATIVE_PATH, 'CMP-[0-9]+')                      AS TICKET_ID,
-       RELATIVE_PATH,
-       SIZE                                                            AS FILE_SIZE,
-       MD5                                                             AS FILE_MD5,
-       LAST_MODIFIED                                                   AS FILE_MODIFIED,
-       RAW.PDF_TEXT(BUILD_SCOPED_FILE_URL(@LAND.STG_DOCS, RELATIVE_PATH)) AS BODY,
-       LENGTH(BODY)                                                    AS BODY_CHARS,
-       CURRENT_TIMESTAMP()                                             AS LOAD_TS
-FROM   RAW.STR_DOCS_NEWFILES
-WHERE  METADATA$ACTION = 'INSERT'
-  AND  RELATIVE_PATH ILIKE 'complaints/%.pdf';
+SELECT REGEXP_SUBSTR(d.RELATIVE_PATH, 'CMP-[0-9]+')                       AS TICKET_ID,
+       d.RELATIVE_PATH,
+       d.SIZE                                                             AS FILE_SIZE,
+       d.MD5                                                              AS FILE_MD5,
+       d.LAST_MODIFIED                                                    AS FILE_MODIFIED,
+       RAW.PDF_TEXT(BUILD_SCOPED_FILE_URL(@LAND.STG_DOCS, d.RELATIVE_PATH)) AS BODY,
+       LENGTH(BODY)                                                       AS BODY_CHARS,
+       CURRENT_TIMESTAMP()                                                AS LOAD_TS
+FROM   DIRECTORY(@LAND.STG_DOCS) d
+WHERE  d.RELATIVE_PATH ILIKE 'complaints/%.pdf'
+  AND  NOT EXISTS (SELECT 1
+                   FROM   RAW.COMPLAINT_DOC c
+                   WHERE  c.RELATIVE_PATH = d.RELATIVE_PATH
+                     AND  c.FILE_MD5 = d.MD5);
+
+-- =============================================================================
+-- STEP 3b — the stream, for what arrives NEXT.
+--
+-- Fourth of the five stream types, and now pointed at the job it can actually
+-- do. IF NOT EXISTS rather than OR REPLACE: replacing a stream resets its
+-- offset, which is precisely how the pending 300 files were lost the first time.
+--
+-- Zero rows here is the correct answer right after a backfill. To see it work:
+--   upload one more PDF to docs/complaints/, ALTER STAGE ... REFRESH, and this
+--   returns exactly that one file. Re-running STEP 3 then loads only it, since
+--   the anti-join skips the 300 already present.
+-- =============================================================================
+CREATE STREAM IF NOT EXISTS RAW.STR_DOCS_NEWFILES ON STAGE LAND.STG_DOCS;
+
+SELECT COUNT(*) AS files_awaiting_processing FROM RAW.STR_DOCS_NEWFILES;
 
 -- =============================================================================
 -- STEP 4 — verify. Counts, not status fields.
@@ -167,16 +183,21 @@ SELECT COUNT(*)                              AS docs,
        MAX(BODY_CHARS)                       AS max_chars
 FROM   RAW.COMPLAINT_DOC;
 
--- Every extraction should carry the header line. Anything that does not is a
--- reader problem, not a data problem.
-SELECT COUNT(*) AS missing_header
-FROM   RAW.COMPLAINT_DOC
-WHERE  BODY NOT LIKE '%QuickCommerce - Customer Complaint%';
+-- Every extraction should carry the header line; anything that does not is a
+-- reader problem, not a data problem. Asserted as a proportion, not a count. "0 rows missing the header" is also
+-- what an EMPTY table returns -- the same false green that has been wrong every
+-- time in this project. Comparing against the row count cannot be fooled that
+-- way.
+SELECT COUNT(*)                                                        AS docs,
+       SUM(IFF(BODY LIKE '%QuickCommerce - Customer Complaint%', 1, 0)) AS with_header,
+       IFF(COUNT(*) > 0
+           AND COUNT(*) = SUM(IFF(BODY LIKE '%QuickCommerce - Customer Complaint%', 1, 0)),
+           'OK', 'CHECK ME')                                            AS verdict
+FROM   RAW.COMPLAINT_DOC;
 
--- The stream is now empty. That is the offset having advanced, not data loss.
-SELECT COUNT(*) AS stream_after_consume FROM RAW.STR_DOCS_NEWFILES;
-
-SELECT TICKET_ID, BODY_CHARS, LEFT(BODY, 220) AS SAMPLE
+-- SNIPPET, not SAMPLE. SAMPLE is reserved -- it is the table-sampling clause.
+-- Third reserved-word collision in this project after `rows` and `check`.
+SELECT TICKET_ID, BODY_CHARS, LEFT(BODY, 220) AS SNIPPET
 FROM   RAW.COMPLAINT_DOC
 ORDER  BY TICKET_ID
 LIMIT  3;
