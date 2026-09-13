@@ -131,12 +131,15 @@ USE WAREHOUSE WH_TRANSFORM_XS;
 
 -- Everything the PII tag now reaches, in one query. This is the inventory a
 -- column-by-column policy attachment can never produce.
-SELECT REF_ENTITY_NAME AS object_name,
-       REF_COLUMN_NAME AS column_name,
-       TAG_VALUE
+-- SELECT *, deliberately. The first version named REF_ENTITY_NAME and
+-- REF_COLUMN_NAME, borrowed from POLICY_REFERENCES, and this is a different
+-- function with a different shape. Printing everything means the next person
+-- reads the columns instead of guessing them, and the check below can be
+-- checked against what actually came back.
+SELECT *
 FROM   TABLE(INFORMATION_SCHEMA.TAG_REFERENCES_ALL_COLUMNS(
               'QCOMMERCE.MART.DIM_CUSTOMER', 'TABLE'))
-ORDER  BY column_name;
+ORDER  BY COLUMN_NAME;
 
 -- =============================================================================
 -- STEP 4 — checks.
@@ -166,7 +169,7 @@ WITH proposed AS (
       AND  CLASSIFIED_AT = (SELECT MAX(CLASSIFIED_AT) FROM GOV.CLASSIFICATION_RESULT)
 ),
 protected AS (
-    SELECT REF_COLUMN_NAME AS COLUMN_NAME
+    SELECT COLUMN_NAME
     FROM   TABLE(INFORMATION_SCHEMA.TAG_REFERENCES_ALL_COLUMNS(
                   'QCOMMERCE.MART.DIM_CUSTOMER', 'TABLE'))
     UNION
