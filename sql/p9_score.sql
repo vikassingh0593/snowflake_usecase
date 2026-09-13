@@ -148,8 +148,8 @@ SELECT 'scores_are_probabilities', 'LAB.ORDER_SCORES',
          WHERE P_BREACH IS NULL OR P_BREACH < 0 OR P_BREACH > 1) = 0
        AND (SELECT COUNT(DISTINCT ROUND(P_BREACH, 4)) FROM LAB.ORDER_SCORES) > 100,
        (SELECT COUNT(DISTINCT ROUND(P_BREACH, 4)) FROM LAB.ORDER_SCORES),
-       'all in [0,1], and more than 100 distinct values -- a constant column '
-       'would satisfy the range test perfectly',
+       'all in [0,1], and more than 100 distinct values -- a constant '
+         || 'column would satisfy the range test perfectly',
        OBJECT_CONSTRUCT('min', (SELECT ROUND(MIN(P_BREACH), 4) FROM LAB.ORDER_SCORES),
                         'max', (SELECT ROUND(MAX(P_BREACH), 4) FROM LAB.ORDER_SCORES));
 
@@ -167,7 +167,7 @@ SELECT 'top_decile_beats_bottom_decile', 'LAB.ORDER_SCORES',
        top_rate > 2 * bottom_rate AND bottom_rate > 0,
        ROUND(top_rate / NULLIF(bottom_rate, 0) * 100),
        'riskiest tenth breaches at more than twice the rate of the safest '
-       'tenth, ratio in percent',
+         || 'tenth, ratio in percent',
        OBJECT_CONSTRUCT('top_decile_pct',    ROUND(top_rate * 100, 2),
                         'bottom_decile_pct', ROUND(bottom_rate * 100, 2))
 FROM r;
