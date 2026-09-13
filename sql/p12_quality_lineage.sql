@@ -172,15 +172,21 @@ FROM   SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY;
 -- STEP 4 — checks.
 -- =============================================================================
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
-SELECT 'data_metric_function_is_attached', 'MART.FCT_ORDER_ITEM',
+-- Asserts the attachment exists AT THIS POINT IN THE FILE. STEP 5 removes it
+-- deliberately, so re-reading this check later against a detached table is
+-- expected -- the check records that the mechanism worked, not that it is
+-- still armed.
+SELECT 'data_metric_function_was_attachable', 'MART.FCT_ORDER_ITEM',
        (SELECT COUNT(*) FROM TABLE(INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES(
                  REF_ENTITY_NAME => 'QCOMMERCE.MART.FCT_ORDER_ITEM',
                  REF_ENTITY_DOMAIN => 'TABLE'))) >= 1,
        (SELECT COUNT(*) FROM TABLE(INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES(
                  REF_ENTITY_NAME => 'QCOMMERCE.MART.FCT_ORDER_ITEM',
                  REF_ENTITY_DOMAIN => 'TABLE'))),
-       'the null-count metric is attached to the column dbt also tests, so the '
-         || 'same rule now runs on a pipeline AND on the platform',
+       'the null-count metric attached to the column dbt also tests. It is '
+         || 'detached again in STEP 5: the schedule stayed at an hourly cron '
+         || 'after UNSET and the only thing stopping it was a missing EXECUTE '
+         || 'privilege, which is an armed trap rather than a safe state',
        NULL;
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
@@ -207,24 +213,45 @@ ORDER  BY CHECK_TS DESC
 LIMIT  3;
 
 -- =============================================================================
--- STEP 5 — stop the schedule.
+-- STEP 5 — detach it completely, and why "unset the schedule" was not enough.
 --
--- The metric stays attached, so the reference and the mechanism survive in the
--- catalogue for anyone reading this later. The SCHEDULE does not, because a
--- schedule is the part that spends credits when nobody is looking, and this
--- project's rule is that nothing runs on its own.
+-- The first version of this step unset DATA_METRIC_SCHEDULE and left the
+-- metric attached, on the reasoning that the attachment is the demonstration
+-- and the schedule is the part that spends. The catalogue answered:
 --
--- Re-attach it by re-running STEP 1.
+--   NULL_COUNT | 0 */1 * * * UTC |
+--   SUSPENDED_INSUFFICIENT_PRIVILEGE_TO_EXECUTE_DATA_METRIC_FUNCTION
+--
+-- Two things in one row. The reference still carries an hourly cron after the
+-- UNSET, and the only reason nothing is running is a MISSING PRIVILEGE --
+-- EXECUTE DATA METRIC FUNCTION ON ACCOUNT, which this role does not hold.
+--
+-- That is an armed trap rather than a safe state. Whoever grants that
+-- privilege later, for some unrelated reason, starts an hourly job on a table
+-- nobody asked to monitor, and the connection between the grant and the spend
+-- will not be obvious from either end.
+--
+-- So the attachment goes. The direct call in STEP 1 already proved the metric
+-- works and cost one query to do it; keeping a scheduled object attached to
+-- prove the same thing is not worth a trap.
+--
+-- p12_probe.sql reported "data metric schedule: YES" because SET
+-- DATA_METRIC_SCHEDULE succeeded. Setting the attribute and being allowed to
+-- execute the metric are different privileges, and the probe tested the
+-- statement rather than the outcome.
 -- =============================================================================
 ALTER TABLE MART.FCT_ORDER_ITEM UNSET DATA_METRIC_SCHEDULE;
 
+ALTER TABLE MART.FCT_ORDER_ITEM
+  DROP DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT ON (PRODUCT_SK);
+
+-- Must come back empty. If it does not, something is still attached and the
+-- privilege grant above is the only thing standing between it and a schedule.
 SELECT METRIC_NAME, SCHEDULE, SCHEDULE_STATUS
 FROM   TABLE(INFORMATION_SCHEMA.DATA_METRIC_FUNCTION_REFERENCES(
               REF_ENTITY_NAME => 'QCOMMERCE.MART.FCT_ORDER_ITEM',
               REF_ENTITY_DOMAIN => 'TABLE'));
 
 -- =============================================================================
--- TEARDOWN
+-- TEARDOWN — STEP 5 already detaches the metric. Nothing is left running.
 -- =============================================================================
--- ALTER TABLE MART.FCT_ORDER_ITEM
---   DROP DATA METRIC FUNCTION SNOWFLAKE.CORE.NULL_COUNT ON (PRODUCT_SK);
