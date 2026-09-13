@@ -217,13 +217,20 @@ WHERE  WAS_TRAINED_ON;
 
 -- Confidence deciles over the 240. If the model is calibrated at all, the low
 -- deciles are where the unseen templates ended up.
-SELECT NTILE(5) OVER (ORDER BY CONFIDENCE DESC)                   AS fifth,
+SELECT fifth,
        COUNT(*)                                                   AS complaints,
        ROUND(MIN(CONFIDENCE), 3)                                  AS from_conf,
        ROUND(MAX(CONFIDENCE), 3)                                  AS to_conf,
        COUNT(DISTINCT PREDICTED_REASON_CODE)                      AS distinct_codes
-FROM   LAB.COMPLAINT_PREDICTION
-WHERE  NOT WAS_TRAINED_ON
+FROM (
+    -- NTILE has to be assigned in here. A window function is evaluated after
+    -- GROUP BY, so one cannot sit in the select list of the query that groups
+    -- by it: "CONFIDENCE is not a valid group by expression".
+    SELECT NTILE(5) OVER (ORDER BY CONFIDENCE DESC) AS fifth,
+           CONFIDENCE, PREDICTED_REASON_CODE
+    FROM   LAB.COMPLAINT_PREDICTION
+    WHERE  NOT WAS_TRAINED_ON
+)
 GROUP  BY fifth
 ORDER  BY fifth;
 

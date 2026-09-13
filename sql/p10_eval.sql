@@ -129,20 +129,96 @@ ORDER  BY n DESC, actual;
 -- Does confidence know when it is wrong? If the low-confidence rows are where
 -- the errors concentrate, the score is usable as a routing threshold -- send
 -- the bottom fifth to a human and the rest straight to a queue.
-SELECT NTILE(5) OVER (ORDER BY CONFIDENCE DESC)                    AS fifth,
+SELECT fifth,
        COUNT(*)                                                    AS complaints,
        ROUND(MIN(CONFIDENCE), 3)                                   AS from_conf,
        ROUND(MAX(CONFIDENCE), 3)                                   AS to_conf,
        SUM(IFF(pred = actual, 1, 0))                               AS correct,
        ROUND(100.0 * SUM(IFF(pred = actual, 1, 0)) / COUNT(*), 1)  AS accuracy_pct
 FROM (
-    SELECT p.PREDICTED_REASON_CODE AS pred, t.REASON_CODE AS actual, p.CONFIDENCE
+    -- NTILE is assigned here rather than in the outer select list: a window
+    -- function is evaluated after GROUP BY and cannot be grouped by.
+    SELECT NTILE(5) OVER (ORDER BY p.CONFIDENCE DESC)  AS fifth,
+           p.PREDICTED_REASON_CODE                     AS pred,
+           t.REASON_CODE                               AS actual,
+           p.CONFIDENCE
     FROM      LAB.COMPLAINT_PREDICTION p
     JOIN      OPS.COMPLAINT_TRUTH      t ON t.TICKET_ID = p.TICKET_ID
     WHERE NOT p.WAS_TRAINED_ON
 )
 GROUP  BY fifth
 ORDER  BY fifth;
+
+-- =============================================================================
+-- STEP 3b — did it learn anything, or did it memorise the templates.
+--
+-- This is the question the whole part turns on, and TEMPLATE_INDEX in the
+-- answer key is what makes it answerable. Every complaint was generated from
+-- one of three sentence templates for its reason code. A held-out document is
+-- "seen" if some training document used the same code and the same template --
+-- same skeleton, different item names, minute counts and rupee amounts.
+--
+-- If accuracy is roughly equal on both sides, the model learned the vocabulary
+-- that distinguishes the classes. If it collapses on the unseen side, the
+-- model is a lookup table over template stems and the headline accuracy is a
+-- statement about how the corpus was sampled rather than about the model.
+--
+-- The comparison to keep in mind for the unseen side is 10%, which is what
+-- guessing uniformly over ten classes would score.
+-- =============================================================================
+WITH trained_pairs AS (
+    SELECT DISTINCT t.REASON_CODE, t.TEMPLATE_INDEX
+    FROM   OPS.COMPLAINT_TRUTH t
+    JOIN   CORE.COMPLAINT      c ON c.TICKET_ID = t.TICKET_ID
+    WHERE  c.IS_LABELLED
+),
+held AS (
+    SELECT p.PREDICTED_REASON_CODE                  AS pred,
+           t.REASON_CODE                            AS actual,
+           t.TEMPLATE_INDEX,
+           p.CONFIDENCE,
+           tp.REASON_CODE IS NOT NULL               AS template_was_seen
+    FROM      LAB.COMPLAINT_PREDICTION p
+    JOIN      OPS.COMPLAINT_TRUTH      t  ON t.TICKET_ID = p.TICKET_ID
+    LEFT JOIN trained_pairs            tp ON tp.REASON_CODE    = t.REASON_CODE
+                                         AND tp.TEMPLATE_INDEX = t.TEMPLATE_INDEX
+    WHERE NOT p.WAS_TRAINED_ON
+)
+SELECT IFF(template_was_seen, 'template seen in training',
+                              'template never seen')                AS phrasing,
+       COUNT(*)                                                     AS complaints,
+       SUM(IFF(pred = actual, 1, 0))                                AS correct,
+       ROUND(100.0 * SUM(IFF(pred = actual, 1, 0)) / COUNT(*), 2)   AS accuracy_pct,
+       ROUND(AVG(CONFIDENCE), 3)                                    AS avg_confidence
+FROM   held
+GROUP  BY template_was_seen
+ORDER  BY template_was_seen DESC;
+
+-- The same split per class, so it is visible that this is not one class
+-- dragging the average.
+WITH trained_pairs AS (
+    SELECT DISTINCT t.REASON_CODE, t.TEMPLATE_INDEX
+    FROM   OPS.COMPLAINT_TRUTH t
+    JOIN   CORE.COMPLAINT      c ON c.TICKET_ID = t.TICKET_ID
+    WHERE  c.IS_LABELLED
+),
+held AS (
+    SELECT p.PREDICTED_REASON_CODE AS pred, t.REASON_CODE AS actual,
+           tp.REASON_CODE IS NOT NULL AS template_was_seen
+    FROM      LAB.COMPLAINT_PREDICTION p
+    JOIN      OPS.COMPLAINT_TRUTH      t  ON t.TICKET_ID = p.TICKET_ID
+    LEFT JOIN trained_pairs            tp ON tp.REASON_CODE    = t.REASON_CODE
+                                         AND tp.TEMPLATE_INDEX = t.TEMPLATE_INDEX
+    WHERE NOT p.WAS_TRAINED_ON
+)
+SELECT actual                                                       AS class,
+       SUM(IFF(template_was_seen, 1, 0))                            AS seen,
+       SUM(IFF(template_was_seen AND pred = actual, 1, 0))          AS seen_correct,
+       SUM(IFF(template_was_seen, 0, 1))                            AS unseen,
+       SUM(IFF(NOT template_was_seen AND pred = actual, 1, 0))      AS unseen_correct
+FROM   held
+GROUP  BY actual
+ORDER  BY unseen DESC, seen DESC;
 
 -- =============================================================================
 -- STEP 4 — record the held-out result beside the cross-validated one.
@@ -302,8 +378,44 @@ SELECT 'thin_template_coverage_explains_the_errors', 'LAB.COMPLAINT_PREDICTION',
                                                  recall, NULL)), 3))
 FROM rec;
 
+INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
+WITH trained_pairs AS (
+    SELECT DISTINCT t.REASON_CODE, t.TEMPLATE_INDEX
+    FROM   OPS.COMPLAINT_TRUTH t
+    JOIN   CORE.COMPLAINT      c ON c.TICKET_ID = t.TICKET_ID
+    WHERE  c.IS_LABELLED
+),
+held AS (
+    SELECT p.PREDICTED_REASON_CODE AS pred, t.REASON_CODE AS actual,
+           tp.REASON_CODE IS NOT NULL AS template_was_seen
+    FROM      LAB.COMPLAINT_PREDICTION p
+    JOIN      OPS.COMPLAINT_TRUTH      t  ON t.TICKET_ID = p.TICKET_ID
+    LEFT JOIN trained_pairs            tp ON tp.REASON_CODE    = t.REASON_CODE
+                                         AND tp.TEMPLATE_INDEX = t.TEMPLATE_INDEX
+    WHERE NOT p.WAS_TRAINED_ON
+),
+split AS (
+    SELECT AVG(IFF(template_was_seen, IFF(pred = actual, 1.0, 0.0), NULL))       AS seen_acc,
+           AVG(IFF(template_was_seen, NULL, IFF(pred = actual, 1.0, 0.0)))       AS unseen_acc,
+           SUM(IFF(template_was_seen, 1, 0))                                     AS n_seen,
+           SUM(IFF(template_was_seen, 0, 1))                                     AS n_unseen
+    FROM held
+)
+SELECT 'result_is_template_memorisation_not_generalisation', 'LAB.COMPLAINT_PREDICTION',
+       seen_acc >= 0.95 AND unseen_acc <= 0.20 AND n_seen + n_unseen = 240,
+       ROUND(unseen_acc * 10000),
+       'near-perfect on phrasings seen in training and at or below 20% on '
+         || 'phrasings never seen -- the second figure in basis points, '
+         || 'against 1000 for guessing uniformly over ten classes',
+       OBJECT_CONSTRUCT('seen_n',       n_seen,
+                        'seen_acc',     ROUND(seen_acc, 4),
+                        'unseen_n',     n_unseen,
+                        'unseen_acc',   ROUND(unseen_acc, 4),
+                        'chance',       0.1)
+FROM split;
+
 SELECT CHECK_NAME, PASSED, OBSERVED, EXPECTED, DETAIL
 FROM   OPS.DQ_RESULTS
 WHERE  TARGET IN ('OPS.COMPLAINT_TRUTH', 'LAB.COMPLAINT_PREDICTION')
 ORDER  BY CHECK_TS DESC
-LIMIT  5;
+LIMIT  6;

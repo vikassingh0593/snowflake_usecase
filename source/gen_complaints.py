@@ -238,7 +238,8 @@ def build(n: int) -> tuple[list[dict], list[str]]:
         promised = rng.choice([10, 12, 15, 18, 20, 25])
         late = rng.randint(6, 48)
         item, item2 = rng.sample(ITEMS, 2)
-        text = rng.choice(REASONS[code]).format(
+        template = rng.choice(REASONS[code])
+        text = template.format(
             promised=promised, actual=promised + late, late=late, nth=rng.randint(2, 6),
             t=f"{rng.randint(18, 22)}:{rng.randrange(0, 60, 5):02d}",
             item=item, item2=item2, n=rng.randint(4, 12), n2=rng.randint(2, 3),
@@ -254,6 +255,11 @@ def build(n: int) -> tuple[list[dict], list[str]]:
             "channel": rng.choices(["app", "email", "call_centre"], [6, 3, 1])[0],
             "raised_at": raised.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "reason_code": code,
+            # Which of the three templates for this code produced the text.
+            # Recorded so that an evaluation can separate documents phrased the
+            # way training saw them from documents phrased a new way. rng is
+            # not touched: choice() is still called exactly once.
+            "template_index": REASONS[code].index(template),
             "body": body,
         })
     return rows, codes
@@ -301,10 +307,11 @@ def main() -> int:
     # ---- the answer key, for scoring only. Never joined in a model. ----
     with open(os.path.join(OUT, "_truth.csv"), "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
-        w.writerow(["ticket_id", "order_id", "store_id", "raised_at", "reason_code"])
+        w.writerow(["ticket_id", "order_id", "store_id", "raised_at",
+                    "reason_code", "template_index"])
         for r in rows:
             w.writerow([r["ticket_id"], r["order_id"], r["store_id"],
-                        r["raised_at"], r["reason_code"]])
+                        r["raised_at"], r["reason_code"], r["template_index"]])
 
     total = sum(os.path.getsize(os.path.join(OUT, f"{r['ticket_id']}.pdf")) for r in rows)
     print(f"{len(rows)} PDFs in {OUT}  ({total / 1024:.0f} KB)")
