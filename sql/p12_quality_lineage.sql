@@ -40,12 +40,22 @@ USE DATABASE QCOMMERCE;
 -- Called directly. A DMF is an ordinary function and does not have to be
 -- attached to anything to be useful, which is the cheapest way to get the
 -- number and the one most easily missed.
+-- NULL_COUNT and DUPLICATE_COUNT take one column each. ROW_COUNT is NOT here,
+-- and the reason is worth keeping: its signature is TABLE() with zero columns,
+-- so SELECT * hands it twelve and it refuses --
+--
+--   000939 (22023): too many arguments for function [ROW_COUNT$V1(...)]
+--   expected 0, got 1
+--
+-- It is built to be ATTACHED to a table, where the platform supplies the
+-- table, not to be called with a projection. COUNT(*) is the direct-call
+-- answer and always was; reaching for a DMF to count rows was showing off.
 SELECT SNOWFLAKE.CORE.NULL_COUNT(SELECT PRODUCT_SK FROM MART.FCT_ORDER_ITEM)
          AS null_product_sk,
-       SNOWFLAKE.CORE.ROW_COUNT(SELECT * FROM MART.FCT_ORDER_ITEM)
-         AS rows_,
        SNOWFLAKE.CORE.DUPLICATE_COUNT(SELECT ORDER_ITEM_SK FROM MART.FCT_ORDER_ITEM)
-         AS duplicate_keys;
+         AS duplicate_keys,
+       (SELECT COUNT(*) FROM MART.FCT_ORDER_ITEM)
+         AS rows_;
 
 -- Expression 2, so the same rule has a dated history beside the other two.
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
