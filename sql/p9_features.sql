@@ -158,10 +158,17 @@ FROM   LAB.ORDER_FEATURES
 GROUP  BY SPLIT
 ORDER  BY SPLIT DESC;
 
--- Does the label actually move with each driver, before any model is fitted.
--- If a driver shows a flat breach rate across its own quartiles there is
--- nothing for the model to find and the fit will say so later; better to know
--- now than to read it out of a coefficient.
+-- Does the label move with each driver, before any model is fitted.
+--
+-- Read this table as description, not as evidence. Each row is a MARGINAL
+-- rate -- the breach rate across one driver's quartiles while every other
+-- driver varies freely -- and a marginal rate can be flat, or point the wrong
+-- way, while the conditional relationship is strong. store_load_60m does
+-- exactly that here: true weight +0.70, marginal rate falling. Busy stores are
+-- busy because customers live near them, so store load is negatively
+-- correlated with distance, and distance is the dominant term. Conditioning on
+-- distance is the entire job of the regression; STEP 0 of p9_train.sql shows
+-- the same load effect with distance held still.
 SELECT driver, quartile, COUNT(*) AS orders, ROUND(AVG(LABEL) * 100, 2) AS breach_pct
 FROM (
     SELECT 'dist_km'        AS driver, NTILE(4) OVER (ORDER BY DIST_KM)        AS quartile, LABEL FROM LAB.ORDER_FEATURES

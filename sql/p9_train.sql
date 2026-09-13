@@ -28,6 +28,51 @@ ALTER SESSION SET QUERY_TAG = 'p09:train';
 USE DATABASE QCOMMERCE;
 
 -- =============================================================================
+-- STEP 0 — why the marginal table in p9_features.sql points the wrong way.
+--
+-- store_load_60m has a true weight of +0.70 in the source system and its
+-- marginal breach rate FALLS across its own quartiles. The claim being tested
+-- here is that distance is the confound: customers are routed to their nearest
+-- store, so a store is busy precisely because its customers are close, and
+-- distance carries up to 3.8 in the logit against load's 0.2 or so.
+--
+-- If the claim holds, two things are true below: the correlation between
+-- distance and load is negative, and inside each distance quartile the breach
+-- rate RISES with load. If instead load still falls within a distance stratum,
+-- the confound story is wrong and the positive coefficient the fit is about to
+-- produce would need another explanation.
+-- =============================================================================
+SELECT ROUND(CORR(DIST_KM, STORE_LOAD_60M), 4)                    AS corr_dist_load,
+       ROUND(CORR(DIST_KM, LABEL), 4)                             AS corr_dist_breach,
+       ROUND(CORR(STORE_LOAD_60M, LABEL), 4)                      AS corr_load_breach,
+       ROUND(AVG(STORE_LOAD_60M), 2)                              AS avg_load,
+       MAX(STORE_LOAD_60M)                                        AS max_load,
+       ROUND(AVG(LEAST(STORE_LOAD_60M, 15) / 15.0), 4)            AS avg_f_load_15
+FROM   LAB.ORDER_FEATURES;
+
+SELECT dist_q,
+       MAX(IFF(load_q = 1, breach_pct, NULL))                     AS load_q1_pct,
+       MAX(IFF(load_q = 2, breach_pct, NULL))                     AS load_q2_pct,
+       MAX(IFF(load_q = 3, breach_pct, NULL))                     AS load_q3_pct,
+       MAX(IFF(load_q = 4, breach_pct, NULL))                     AS load_q4_pct,
+       MAX(IFF(load_q = 4, breach_pct, NULL))
+         - MAX(IFF(load_q = 1, breach_pct, NULL))                 AS q4_minus_q1,
+       SUM(orders)                                                AS orders
+FROM (
+    SELECT dist_q, load_q, COUNT(*) AS orders,
+           ROUND(AVG(LABEL) * 100, 2) AS breach_pct
+    FROM (
+        SELECT NTILE(4) OVER (ORDER BY DIST_KM)        AS dist_q,
+               NTILE(4) OVER (ORDER BY STORE_LOAD_60M) AS load_q,
+               LABEL
+        FROM LAB.ORDER_FEATURES
+    )
+    GROUP BY dist_q, load_q
+)
+GROUP BY dist_q
+ORDER BY dist_q;
+
+-- =============================================================================
 -- STEP 1 — where results go. IF NOT EXISTS, because the interesting question
 -- after the second run is what changed between versions.
 -- =============================================================================
