@@ -900,6 +900,147 @@ separation for nearest neighbour to work, which is why B lands where it does.
 
 ---
 
+## Part 11 — Streamlit in Snowflake, and `SERVE`
+
+A four-tab operations console, the `SERVE` contract it reads, and the first
+dynamic table in the project. Files: `p11_streamlit_probe.sql`, `p11_serve.sql`,
+`p11_fix_object_type.sql`, `streamlit/app.py`, `scripts/p11_deploy.sh`.
+
+### The finding: a version listing describes a catalogue, not a runtime
+
+`INFORMATION_SCHEMA.PACKAGES` advertises **streamlit 1.52.2**. The app, asked
+to report `streamlit.__version__` from inside itself, says **1.22.0**. Thirty
+minor versions apart.
+
+That is not a curiosity. `hide_index` and `column_config` both arrived in 1.23
+and `st.toggle` in 1.26, so three things the app was written with do not exist
+in the runtime that executes it. The first deploy died on the first one:
+
+```
+TypeError: DataFrameSelectorMixin.dataframe() got an unexpected
+keyword argument 'hide_index'
+```
+
+`DataFrameSelectorMixin` is Snowflake's own wrapper, not Streamlit's
+`DataFrameMixin`, which is the tell: the app runtime is a separate environment
+with its own shim, and the package channel describes neither.
+
+**The probe file said this at the time and I built against the table anyway.**
+Its own comment read "only the app itself can report what it is really
+running", and then 343 lines went in before anything had asked the app. The
+right order was a ten-line version reporter first, four tabs second.
+
+The fix is feature detection rather than version detection, because the version
+string describes Streamlit and not what the wrapper forwards:
+
+| helper | tries | falls back to |
+|---|---|---|
+| `show_table` | `st.dataframe(df, use_container_width=True)` | bare `st.dataframe(df)` |
+| `toggle` | `st.toggle` | `st.checkbox` |
+| `log_action` | `session.sql(stmt, params=[...])` | literals with single quotes doubled |
+
+`TypeError` on keyword binding is raised before any statement reaches the
+warehouse, so a fallback cannot double-draw or double-insert.
+
+### This is the second version skew, and they are not account-tier gates
+
+| | advertised | actual | class |
+|---|---|---|---|
+| Cortex AI functions | in the docs | refused | **tier gate** |
+| External access integration | rule ✓, secret ✓ | integration refused | **tier gate** |
+| Model Registry packages | channel has `snowflake-ml-python` | inference function wants `>=2.0,<3`, channel has 1.9.2 | version skew |
+| Streamlit runtime | `PACKAGES` says 1.52.2 | app runs 1.22.0 | version skew |
+
+The two classes want different responses. A tier gate removes a capability and
+the only honest move is to record it and route around. A version skew removes
+nothing -- both were worked around inside a day -- but it is invisible to every
+`SHOW` and every catalogue table, so it is only ever found by running the thing.
+
+### The dynamic table, and why the first one was rejected
+
+The first version put the whole aggregate in one dynamic table. Snowflake
+answered:
+
+```
+FULL refresh mode was selected because: This dynamic table contains a
+complex query.
+```
+
+`ROUND(100.0 * AVG(...))` and `AVG(DATEDIFF(...))` are not incrementally
+maintainable -- **an average cannot be updated from a delta without its
+denominator** -- so every refresh re-aggregated all 19,377 rows.
+
+Split in two: `SERVE.SLA_STORE_HOUR_AGG` holds counts and sums only, with
+`REFRESH_MODE = INCREMENTAL` stated explicitly so an unmaintainable query fails
+at `CREATE` instead of downgrading quietly. `SERVE.SLA_BY_STORE_HOUR` is a view
+above it doing the division. Confirmed from the platform's own metadata:
+
+```
+refresh_mode             INCREMENTAL
+configured_refresh_mode  INCREMENTAL
+refresh_mode_reason      None
+```
+
+**A dynamic table holds additive aggregates; derived ratios live in a view
+above it.** Sums and counts compose from deltas, averages and percentages do
+not.
+
+The app reads `SERVE.SLA_BY_STORE_HOUR` either way. That the storage under it
+could be restructured without touching the app is the argument for having a
+`SERVE` layer, demonstrated rather than asserted. This spends one of the two
+dynamic tables the cost rules allow, at the 60-minute floor.
+
+### `SERVE`, which had been empty since Part 1
+
+| Object | Rows | What |
+|---|---|---|
+| `SLA_STORE_HOUR_AGG` | 7,626 | dynamic table, incremental, additive only |
+| `SLA_BY_STORE_HOUR` | 7,626 | view — the ratios, and the name the app knows |
+| `ORDER_RISK` | 4,777 | the TEST window, scored, with outcome carried |
+| `COMPLAINT_TRIAGE` | 300 | routed on the measured 0.235 gate |
+| `DATA_HEALTH` | 43 | latest result per check across the whole project |
+| `MODEL_SCOREBOARD` | 6 | every model version and split |
+| `ACTION_LOG` | — | the only table, written by the app |
+
+The app queries `SERVE` and nothing else. An app reaching into `LAB` pins the
+shape of an experimental schema, and Part 12's masking and row policies need
+one surface to attach to rather than nine.
+
+### The risk queue is a replay, and says so on screen
+
+Every order in this project was delivered weeks ago, so a queue of orders in
+flight would be fiction. What makes the replay worth building is that the
+outcome exists: a dispatcher acts on a score, and the action can be scored
+against what actually happened — the loop a live queue could only promise.
+
+Outcomes are carried in the view and hidden behind a control rather than
+withheld. Withholding them would make the only genuinely useful panel
+impossible: acting on the top 100 of 4,777 reaches roughly 35 of ~770 breaches,
+about 4.5× an untargeted 100, and that is the honest answer to whether the
+score is worth acting on.
+
+`ACTION_LOG` is what makes it more than a dashboard. A later dbt model joins
+decisions to outcomes so the app's own history becomes a feature for the next
+model run. **Verified end to end** — a logged decision appears on the health
+tab.
+
+### Failures in this part
+
+| | |
+|---|---|
+| `Object 'SLA_BY_STORE_HOUR' already exists as DYNAMIC_TABLE` | `CREATE OR REPLACE VIEW` cannot replace an object of a different type. The restructure wanted a name the first run had made a dynamic table. `p11_fix_object_type.sql` drops it once, in its own file, so `p11_serve.sql` stays re-runnable |
+| `invalid property 'DEFAULT_PACKAGES' for 'STREAMLIT'` | I read the name in `DESCRIBE STREAMLIT` output and wrote an `ALTER` for it. It is read-only, it reports what the platform supplies, and the statement bought nothing even had it worked |
+| `CREATE OR REPLACE STREAMLIT` on every deploy | The script's comment claimed it preserved `url_id`. Never checked, and wrong — replacing an object makes a new one and breaks every bookmark. It was also unnecessary: the app resolves `app.py` from the stage when opened, so **the PUT alone ships a code change**. Now `IF NOT EXISTS`, with `RECREATE=1` when a property must change |
+| `hide_index` on `st.dataframe` | Above. Built against a catalogue instead of the runtime |
+| A vacuous check | `auto_band_is_still_clean` first asserted that no hand-labelled complaint in the AUTO band is misclassified. The model reproduces all 60 training labels by construction, so it would have passed at any threshold. Rewritten to score the band against the answer key on complaints the model never saw |
+
+Three of those five are the same error: **reading a value and assuming what it
+implies, instead of testing it.** `DEFAULT_PACKAGES` appeared in output so it
+looked settable. `CREATE OR REPLACE` sounded idempotent so it looked
+bookmark-safe. `PACKAGES` listed 1.52.2 so it looked like the runtime.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -928,7 +1069,7 @@ by lifecycle rule; `archive/`, `external/` and `docs/` do not, and the Iceberg
 metadata in `archive/` must not be deleted while `RAW.ORDER_EVENTS_ICEBERG`
 exists.
 
-**Still unset: the account budget.** Sixteen routes have run against an account
+**Still unset: the account budget.** Nineteen routes have run against an account
 whose only spending control cannot see Snowpipe, Snowpipe Streaming or the
 Python UDFs that mechanisms 10 and 11 will add. 3.78 credits is the last
 verified figure and it predates Parts 3 through 6 entirely. Snowsight -> Admin
@@ -955,7 +1096,7 @@ Mechanisms 10-14 do not touch the source stack at all.
 
 | | |
 |---|---|
-| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, two CORE builds, a MART build and three registered model versions have now run against an account with no serverless cap at all |
+| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, two CORE builds, a MART build, three registered model versions and a dynamic table on an hourly lag have now run against an account with no serverless cap at all |
 | **Credits backfill** | `sql/p3_credits_backfill.sql`, once `ACCOUNT_USAGE` has caught up. The ~3 h latency means Part 3-5 spend is still unmeasured. 3.78 credits is the last verified figure and it predates all of it |
 
 The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
@@ -970,17 +1111,24 @@ rather than by `SHOW`.
 | `CORE` | complete — Parts 7 and 10 |
 | `MART` | complete — Part 8, 9 dbt models, 42 tests passing |
 | `LAB` | complete — Parts 9 and 10, three registered model versions across two models |
+| `SERVE` | complete — Part 11, seven objects including the first dynamic table |
+| `APP` | complete — Part 11, `QC_CONSOLE` deployed and its write-back verified |
 
-**Next is Part 11 — Streamlit in Snowflake.** Everything it would display now
-exists: SLA risk scores per order, complaint classifications with a confidence
-band, the funnel and anomaly split, the DQ results table, and the model metrics
-across versions.
+**Next is Part 12 — governance.** This is where the project does its most
+interesting work, and unusually for this account the capability is confirmed
+present rather than gated: §1 Finding 2 established Enterprise-shaped
+governance by `CREATE MASKING POLICY` succeeding, not by reading an edition
+string.
 
-Two capability questions to settle by attempting them rather than by reading a
-privileges list, as with the three findings in §1 of `ARCHITECTURE.md`: whether
-Streamlit apps can be created on a trial account at all, and which package
-versions the app runtime carries, which is a different channel from the UDF
-runtime that `p6_pkg_probe.sql` measured.
+`SERVE` now exists to attach it to, which was half the reason for building it.
+Masking on customer contact details, row access filtered on `CURRENT_ROLE()`,
+object tagging, and `SYSTEM$CLASSIFY` for PII discovery — the last restoring
+something Cortex's absence took away.
+
+One thing to settle by attempting it: whether `QC_ANALYST` reading `SERVE`
+through a masked view sees what the policy intends. Part 8 already showed that
+`GRANT ALL ON SCHEMA` is not an object grant, so verify by `USE ROLE` and a
+`SELECT`, never by reading the grant.
 
 Carry three lessons forward.
 
@@ -994,6 +1142,11 @@ Carry three lessons forward.
   asserting no two complaints are token-identical failed, and the data was
   right. Before a red check is treated as a defect, establish which of the two
   is wrong.
+- From Part 11: **a catalogue describes what is on offer, not what is
+  running.** `INFORMATION_SCHEMA.PACKAGES` advertised streamlit 1.52.2; the app
+  runtime executes 1.22.0. The same shape produced the `DEFAULT_PACKAGES`
+  error and the wrong claim about `CREATE OR REPLACE` preserving `url_id` —
+  reading a value and assuming what it implies, instead of testing it.
 
 ### Row counts as they stand
 
@@ -1036,8 +1189,15 @@ Downstream of `RAW`, as built:
 | `LAB.COMPLAINT_PREDICTION` / `COMPLAINT_KNN_PREDICTION` | 300 / 300 | 10 |
 | `LAB.COMPLAINT_REASON` | model, V1 and V2 | 10 |
 | `OPS.COMPLAINT_TRUTH` | 300 — answer key, evaluation only | 10 |
+| `SERVE.SLA_STORE_HOUR_AGG` | 7,626 — dynamic table, incremental | 11 |
+| `SERVE.SLA_BY_STORE_HOUR` | 7,626 — view, the ratios | 11 |
+| `SERVE.ORDER_RISK` | 4,777 | 11 |
+| `SERVE.COMPLAINT_TRIAGE` | 300 | 11 |
+| `SERVE.DATA_HEALTH` / `MODEL_SCOREBOARD` | 43 / 6 | 11 |
+| `SERVE.ACTION_LOG` | grows as the app is used | 11 |
+| `APP.QC_CONSOLE` | Streamlit, 4 tabs | 11 |
 
-`SERVE` is still empty — that is Part 13.
+Part 13 extends `SERVE` outward — reader account, private listing, SQL API.
 
 ---
 
@@ -1067,6 +1227,11 @@ Downstream of `RAW`, as built:
 | `sql/p10_vectors.sql` | Hashing UDF → `VECTOR(FLOAT, 256)`, cosine similarity, 1-NN, tone lexicon |
 | `sql/p10_eval.sql`, `sql/p10_eval_compare.sql` | The only files that read the answer key |
 | `scripts/p10_truth.sh` | Regenerates and loads the answer key. Dry-run unless `LOAD=1` |
+| `sql/p11_streamlit_probe.sql` | Can this account create a Streamlit, and what does the channel carry |
+| `sql/p11_serve.sql` | The `SERVE` contract. Dynamic table plus five views and one table |
+| `sql/p11_fix_object_type.sql` | One-time: drops the dynamic table squatting on the view's name |
+| `streamlit/app.py` | The console. Feature-detects its own Streamlit rather than trusting a version string |
+| `scripts/p11_deploy.sh` | PUT ships a code change; CREATE only when absent. `RECREATE=1` forces a replace |
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |

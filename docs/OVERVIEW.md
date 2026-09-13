@@ -4,7 +4,7 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model, predictive scoring and text classification complete.**
+**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model, predictive scoring, text classification and the application layer complete.**
 
 ---
 
@@ -139,7 +139,7 @@ Routes 1, 2 and 3 carry **identical input** so their latency and cost can be
 compared with the data held constant. That comparison is the deliverable, not
 the ingestion.
 
-Route 11 is refused by the account tier. See §12.
+Route 11 is refused by the account tier. See §13.
 
 ---
 
@@ -153,7 +153,7 @@ Route 11 is refused by the account tier. See §12.
 | Read live from a publisher | 15,683 | Marketplace share, never stored |
 | `MART` | 250,510 | 9 tables, dimensional model |
 | `LAB` | 39,654 | Order features and scores at 19,377 rows each, complaint vectors and two sets of predictions at 300 each, three registered model versions |
-| `SERVE` | **0** | Not started |
+| `SERVE` | 12,749 | 7 objects — the governed contract the application reads |
 
 `CORE` in detail:
 
@@ -274,7 +274,52 @@ operational severity, and it is not presented to users as sentiment.
 
 ---
 
-## 10. Access model
+## 10. The operations console
+
+An application inside the platform, so no data leaves it to be displayed. Four
+screens, each reading a published, governed view rather than the working tables
+beneath it — which means the storage under any of them can be rebuilt without
+the application changing.
+
+| Screen | Shows | Records |
+|---|---|---|
+| Operations | On-time rate by store and by local hour, worst store-hours | — |
+| Risk queue | Orders ranked by predicted lateness | The dispatcher's decision |
+| Complaints | Auto-routed against needs-a-human, and the review queue | A confirmed or corrected category |
+| Health | Every data-quality check, model scores by version, decisions taken | — |
+
+**The risk queue is a replay of past days, and the screen says so.** Every order
+in this platform was delivered weeks ago, so a queue of orders in flight would
+be a mock-up. Replaying real days is more useful than a mock-up for one reason:
+the outcome is already known, so a decision taken on a prediction can be
+scored against what actually happened. Acting on the 100 riskiest of 4,777
+orders reaches about 35 of the 770 that were late — roughly four and a half
+times what picking 100 at random would reach. That number, not the prediction
+itself, is what answers whether the score is worth a dispatcher's time.
+
+**Decisions are recorded, and that is the point of the screen rather than a
+feature of it.** A dashboard shows numbers; this writes down what somebody did
+about them. Those decisions become data, and a later transformation joins them
+back to outcomes, so the operator's own judgement becomes an input to the next
+version of the model. Without that, a risk score is a suggestion nobody ever
+learns from.
+
+**The complaint screen routes on a measured threshold, not a chosen one.** Every
+mistake the classifier made on unseen complaints falls below a confidence of
+0.235, and everything above it was correct. So the screen auto-files roughly
+four complaints in five and puts the rest in front of a person, and the wording
+on screen says where the number came from and that retraining the model
+invalidates it.
+
+**The hourly aggregate refreshes incrementally**, applying only what changed
+rather than recomputing the whole history each time. That required splitting
+it: the maintained table holds counts and totals, and the percentages and
+averages are computed in a view above it. An average cannot be updated from a
+change without also knowing how many rows it covered.
+
+---
+
+## 11. Access model
 
 | Role | Grants |
 |---|---|
@@ -292,7 +337,7 @@ and row policies) and approximated through restricted views — and compares the
 
 ---
 
-## 11. Cost controls
+## 12. Cost controls
 
 | Control | Setting |
 |---|---|
@@ -312,10 +357,19 @@ Confirmed spend: 3.78 credits. That figure predates all ingestion work.
 
 ---
 
-## 12. Platform constraints
+## 13. Platform constraints
 
 Three properties of this account shaped the design. All three were established by
 attempting the operation, not by reading a privileges listing.
+
+Two of this account's surprises were of a second kind, and it is worth keeping
+them apart from the three below. A **constraint** means a capability is absent.
+A **version skew** means it is present but a catalogue misdescribes it: the
+model registry asked for a library version its own package channel did not
+carry, and the application runtime turned out to be running software thirty
+releases behind what the platform's package listing advertised. Neither removed
+a capability and both were resolved the same day, but neither is visible in any
+listing — they are found only by running the thing and reading the error.
 
 | Constraint | Consequence |
 |---|---|
@@ -335,7 +389,7 @@ training procedure.
 
 ---
 
-## 13. Build status
+## 14. Build status
 
 | Stage | Status |
 |---|---|
@@ -348,14 +402,14 @@ training procedure.
 | **Dimensional model** (`MART`) | **Complete** |
 | **Risk scoring** | **Complete** |
 | **Text classification** | **Complete** |
+| **Application layer** | **Complete** |
 | Forecasting | Not started |
-| Application layer | Not started |
 | Governance | Not started |
 | Outbound sharing | Not started |
 
 ---
 
-## 14. Repository
+## 15. Repository
 
 | Path | Contents |
 |---|---|

@@ -11,6 +11,17 @@ purpose — if a step needs more than a few hundred MB, the design is wrong.
 
 ## 1. Account facts and the three findings that shaped this
 
+> **Two kinds of surprise, and they want different responses.** The three
+> findings below are **tier gates**: a capability is absent and the only honest
+> move is to record it and route around. Separately, this account has produced
+> two **version skews**, where a capability is present but a catalogue
+> misdescribes it — the Model Registry's inference function demanding
+> `snowflake-ml-python >=2.0,<3` from a channel carrying 1.9.2 (§11), and
+> `INFORMATION_SCHEMA.PACKAGES` advertising streamlit 1.52.2 to an app runtime
+> executing 1.22.0 (§16, Part 11). Skews remove nothing and both were worked
+> around inside a day, but they are invisible to every `SHOW` and every
+> catalogue table, so they are only ever found by running the thing.
+
 | Item | Value |
 |---|---|
 | Snowflake org / locator | `AWTTGVH` / `OOB49311` (Snowsight URL says `olb61128` — that is the account *name*, the locator differs) |
@@ -764,6 +775,69 @@ force all 300 PDFs to be re-uploaded.
 **UNVERIFIED and confirmed working:** the Model Registry accepts a text
 pipeline with a one-column STRING `sample_input_data` and infers the signature.
 
+### Serving and the app as built — Part 11
+
+`SERVE` had been empty since bootstrap. It now holds the contract the app
+reads, and `APP.QC_CONSOLE` is deployed against it.
+
+| Object | Rows | What |
+|---|---|---|
+| `SERVE.SLA_STORE_HOUR_AGG` | 7,626 | dynamic table, `TARGET_LAG = 1 hour`, **INCREMENTAL** |
+| `SERVE.SLA_BY_STORE_HOUR` | 7,626 | view — the ratios, and the name the app knows |
+| `SERVE.ORDER_RISK` | 4,777 | the model's TEST window, scored, outcome carried |
+| `SERVE.COMPLAINT_TRIAGE` | 300 | routed on the measured 0.235 confidence gate |
+| `SERVE.DATA_HEALTH` | 43 | latest result per check, project-wide |
+| `SERVE.MODEL_SCOREBOARD` | 6 | every model version and split |
+| `SERVE.ACTION_LOG` | — | the only table; written by the app |
+| `APP.QC_CONSOLE` | — | Streamlit, 4 tabs, `WH_APP_XS` |
+
+**The app queries `SERVE` and nothing else.** An app reaching into `LAB` pins
+the shape of an experimental schema, and the governance work in §12 needs one
+surface to attach policies to rather than nine.
+
+**A dynamic table holds additive aggregates; ratios live in a view above it.**
+The first version put the whole aggregate in one dynamic table and Snowflake
+downgraded it: *"FULL refresh mode was selected because: This dynamic table
+contains a complex query."* `ROUND(100.0 * AVG(...))` and `AVG(DATEDIFF(...))`
+are not incrementally maintainable — an average cannot be updated from a delta
+without its denominator — so every refresh re-aggregated all 19,377 rows.
+Split into counts and sums below, division above, `REFRESH_MODE = INCREMENTAL`
+stated explicitly so an unmaintainable query fails at `CREATE` rather than
+downgrading silently. The platform now reports `refresh_mode INCREMENTAL`,
+`refresh_mode_reason None`. This spends one of the two dynamic tables the cost
+rules allow.
+
+The app's contract did not change across that restructuring, which is the
+argument for `SERVE` demonstrated rather than asserted.
+
+**The risk queue is a replay and says so on screen.** Every order was delivered
+weeks ago. The outcome is carried in the view and hidden behind a control
+rather than withheld, because withholding it makes the only useful panel
+impossible: acting on the top 100 of 4,777 reaches roughly 35 of ~770 breaches,
+about 4.5× an untargeted 100. `ACTION_LOG` is what makes this more than a
+dashboard — a later dbt model joins decisions to outcomes so the app's own
+history becomes a feature. Verified end to end.
+
+**THE STREAMLIT RUNTIME IS NOT THE ONE THE CHANNEL ADVERTISES.**
+`INFORMATION_SCHEMA.PACKAGES` lists streamlit 1.52.2. The app, asked to report
+`streamlit.__version__` from inside itself, says **1.22.0** — thirty minor
+versions behind. `hide_index` and `column_config` (1.23) and `st.toggle` (1.26)
+therefore do not exist in the runtime that executes the app, and the first
+deploy died on the first of them with a traceback naming
+`DataFrameSelectorMixin` — Snowflake's own wrapper, not Streamlit's.
+
+The app now feature-detects instead: `show_table` tries
+`use_container_width` and falls back on `TypeError`; `toggle` resolves
+`st.toggle` or `st.checkbox`; the write-back tries `session.sql(params=...)`
+and falls back to literals with single quotes doubled. `TypeError` on keyword
+binding is raised before any statement reaches the warehouse, so no fallback
+can double-draw or double-insert.
+
+**Deploying: the PUT is what ships a code change.** The app resolves `app.py`
+from the stage when opened. `CREATE STREAMLIT` is only needed the first time or
+when an object property changes — `CREATE OR REPLACE` issues a new `url_id` and
+breaks every bookmark.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
@@ -787,10 +861,11 @@ pipeline with a one-column STRING `sample_input_data` and infers the signature.
   not: training moved inside the account as a Python stored procedure, so
   Snowpark and `snowflake-ml-python` never had to run on the Mac. dbt takes the
   container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
-- **`SERVE`.** The application layer, Part 13. `LAB` is built — Part 9.
-- **Parts 11 through 15.** Streamlit in Snowflake (11), governance (12),
-  `SERVE` (13), CI/CD (14), the cost model closed out against measured
-  credits (15). Part 10 is built.
+- **Outbound serving.** Reader account, private listing and the SQL API are
+  Part 13. `SERVE` itself is built — Part 11.
+- **Parts 12 through 15.** Governance (12), outbound serving — reader account,
+  private listing, SQL API (13), CI/CD (14), the cost model closed out against
+  measured credits (15). Parts 10 and 11 are built.
 
 ---
 
