@@ -1,0 +1,7 @@
+packages:
+  # Surrogate keys for MART, and the uniqueness test seeds.yml has been noting
+  # as absent since Part 6. A range rather than a hard pin: dbt_utils is stable
+  # within a major, and `dbt deps` records the exact resolved version in
+  # package-lock.yml, which is what CI should install from.
+  - package: dbt-labs/dbt_utils
+    version: [">=1.1.0", "<2.0.0"]

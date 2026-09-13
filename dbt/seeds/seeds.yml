@@ -61,10 +61,10 @@ seeds:
                 values: ["MORNING", "MIDDAY", "EVENING", "NIGHT"]
       - name: promise_minutes
         tests: [not_null]
-    # The test this table really wants is uniqueness on (store_code, daypart),
-    # which needs dbt_utils. No package is installed for one test in a seeds-
-    # only project -- Part 6 adds dbt_utils when the models arrive, and this
-    # gets its test then. Stated rather than silently absent.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [store_code, daypart]
 
   - name: complaint_reason_code
     description: >
