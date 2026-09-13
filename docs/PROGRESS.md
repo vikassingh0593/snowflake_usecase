@@ -512,6 +512,202 @@ warehouse do not collide; here the layer names are the architecture.
 
 ---
 
+## Part 9 — `LAB`, the SLA-breach model
+
+Predict at the moment an order is placed whether it will be delivered after its
+`promised_ts`. Three files: `sql/p9_features.sql`, `sql/p9_train.sql`,
+`sql/p9_score.sql`, plus `sql/p9_report.sql` which re-reads the results without
+refitting.
+
+### The Model Registry wall, and what actually cleared it
+
+`log_model` failed on a two-feature toy model before any real work started:
+
+```
+391525 (42601): Cannot create a Python function with the specified packages.
+'Packages not found: snowflake-ml-python[version='<3,>=2.0']'
+```
+
+This is **not** a fourth account-tier finding. The Registry imports, the
+packages are present, and `log_model` runs far enough to begin creating the
+model's inference function. That function declares `snowflake-ml-python
+>=2.0,<3` as a runtime dependency and the Anaconda channel on this account
+carries **1.9.2**. A version skew, not a permission.
+
+Three fixes were tried at once rather than guessed between, because the four
+preceding rounds had all been guesses:
+
+| Variant | Result |
+|---|---|
+| A — `conda_dependencies=["scikit-learn==1.9.1"]` | **FAILED**, identical error |
+| B — `options={"embed_local_ml_library": True}` | **OK** |
+| C — both | OK, but pins scikit-learn to whatever the training runtime happened to have |
+| Fallback — joblib → stage → `SnowflakeFile` reload | round trip IDENTICAL, held in reserve, not needed |
+
+A failing alone is the informative result: the `>=2.0,<3` constraint comes from
+the Registry's own dependency on `snowflake.ml`, not from the model's sklearn
+version, so pinning sklearn cannot reach it. **B is the pick.** C works and was
+rejected — pinning the runtime's incidental sklearn version breaks the moment
+Snowflake bumps the runtime.
+
+### Training runs inside the account
+
+A Python stored procedure, not a local Snowpark session. The data never leaves,
+the registry and the training runtime are the same environment so client/server
+skew cannot recur, and it sidesteps the native arm64 interpreter outstanding
+since Part 3.
+
+### Leakage discipline
+
+Every feature must be knowable at `PLACED_TS`. Excluded on those grounds:
+`packed_ts`, `picked_up_ts`, `delivered_ts`, `pack_sec`, `pick_sec`, `ride_sec`,
+`lifecycle_outcome` — each leaks the answer outright — and `rider_sk`, because
+which rider was free is a consequence of the same congestion the model is trying
+to predict.
+
+**CANCELLED orders are excluded, not labelled false.** A cancelled order has no
+delivery outcome. Calling it "not breached" would teach the model that
+cancellation prevents lateness, which is a fact about the label definition and
+not about the world. 19,377 delivered in, 623 cancelled out.
+
+Store congestion is counted over the 60 minutes *strictly before* each order —
+the window frame ends at `1 PRECEDING`, not `CURRENT ROW`, so orders sharing a
+millisecond cannot see each other.
+
+### Fitting in the source system's own scaling
+
+The order generator decides lateness with a logit whose coefficients are in
+`source/generate.py`:
+
+```
+-3.05 + 0.85*(dist_km/5) + 0.55*peak + 0.70*(min(load,15)/15) + 0.25*(items/5) + N(0, 0.50)
+```
+
+All four terms are observable at placement and reconstructible from `MART`, so
+the features are built in exactly that scaling and the fitted weights land
+beside the true ones in `OPS.MODEL_COEFFICIENTS`. That turns "the model scored
+0.65" into "the model recovered the process" — a claim that can be wrong.
+
+Two **placebo** features go into the fit alongside: `F_WEEKEND` and `F_COD`,
+both with a true weight of zero. A fit that assigns them weight is finding
+structure in noise, and a check fails on it. They came out **−0.0146** and
+**−0.0509**.
+
+`penalty=None` is set deliberately. L2 is sklearn's default and shrinks every
+coefficient toward zero, which would be indistinguishable from the attenuation
+the unobserved noise term causes. With the regulariser on, the comparison would
+be measuring the regulariser.
+
+### The marginal table lies, and it was worth catching before the fit
+
+Breach rate by quartile, before any model:
+
+| driver | q1 | q2 | q3 | q4 |
+|---|---|---|---|---|
+| `is_peak_hour` | 15.08 | 21.95 | — | — |
+| `item_count` | 15.44 | 16.35 | 16.66 | 17.13 |
+| **`store_load_60m`** | **17.09** | 16.35 | 16.41 | **15.73** |
+| `is_weekend` [placebo] | 16.41 | 16.37 | — | — |
+| `is_cod` [placebo] | 16.54 | 15.57 | — | — |
+
+Store congestion has a true weight of **+0.70** and its marginal rate **falls**.
+The proposed mechanism is distance: customers are routed to their nearest store,
+so a store is busy precisely because its customers are close, and busy
+store-hours are short-distance store-hours. Distance spans 0.176–22.378 km at
+0.85 per 5 km — up to **3.8 in the logit** — while load is capped at
+`min(load,15)/15` and sits at single digits in practice, worth at most ~0.2. The
+larger term points the other way and buries the smaller one.
+
+The multivariate fit conditions on distance and **did** recover `F_LOAD_15` as
+positive. STEP 0 of `p9_train.sql` measures the mechanism directly rather than
+asserting it — correlation between distance and load, and breach rate by load
+quartile *within* each distance quartile.
+
+A comment in `p9_features.sql` originally read a flat marginal rate as proof
+there was nothing to find. That was wrong and is corrected: **a marginal
+relationship can be flat or reversed while the conditional one is strong.**
+
+### Numbers
+
+| | |
+|---|---|
+| Delivered orders / cancelled | 19,377 / 623 |
+| Train | 14,600 to 2026-08-24 23:57:43.555, 16.49% breached |
+| Test | 4,777 from 2026-08-25 00:00:53.306, 16.12% breached |
+| Split | strictly temporal, 45 days / 15 days |
+| `HAVERSINE` vs `ST_DISTANCE` | max difference **0 m** across 19,377 rows |
+| Test ROC AUC | **0.6479** |
+| Calibration | predicted vs actual within **0.70 points** |
+| Distinct scores | 2,867, range 0.0676–0.8135 |
+| Top decile breach rate | **34.73%** vs 7.34% bottom — 4.73×, 2.15× over base |
+| Checks | 12 across the three files, all passing |
+
+Calibration by bucket, test split:
+
+| score range | orders | predicted | actual | gap |
+|---|---|---|---|---|
+| 0.07–0.10 | 581 | 8.92 | 7.57 | −1.34 |
+| 0.10–0.20 | 3,257 | 14.61 | 14.00 | −0.61 |
+| 0.20–0.30 | 707 | 23.54 | 22.49 | −1.05 |
+| 0.30–0.39 | 79 | 33.29 | 27.85 | −5.44 |
+| 0.40–0.50 | 61 | 44.42 | 42.62 | −1.80 |
+| 0.50–0.59 | 47 | 54.44 | 59.57 | +5.13 |
+| 0.60–0.79 | 45 | 67.04 | 77.78 | +10.74 |
+
+4,545 of 4,777 test orders sit in the first three buckets, every one within 1.4
+points. The two positive gaps at the top are **not** established: at n=45 a
+77.78% rate carries a standard error near 6.2 points, so +10.74 is about 1.7 sd.
+If real, the mechanism is a linear logit fitted against an unobserved noise term
+shrinking toward the base rate, which under-predicts exactly where risk is
+highest. Confirming it needs more test days or a calibration layer; neither is
+in Part 9's scope.
+
+**0.6479 is close to this problem's ceiling, not a weak model.** The generator
+adds unobserved `N(0, 0.50)` to the logit and then draws the outcome from a
+Bernoulli, so a model that knew the true coefficients exactly would land in
+roughly the same place. I predicted 0.66–0.74 beforehand and it came in below
+that — the estimate was optimistic.
+
+### The SQL model surface works, and it was the genuinely uncertain one
+
+```sql
+WITH sla AS MODEL QCOMMERCE.LAB.SLA_BREACH
+SELECT sla!PREDICT_PROBA(F_DIST_5, F_PEAK, F_LOAD_15, F_ITEMS_5, F_WEEKEND, F_COD)
+FROM   LAB.ORDER_FEATURES;
+```
+
+Returns an OBJECT keyed `output_feature_0` / `output_feature_1`. All ten sampled
+rows matched the procedure's scores to full precision — Snowpark `mv.run()` and
+the SQL surface hit the same generated function. That also confirmed the scoring
+procedure's column-discovery logic, which takes the *second* added column
+without assuming the name.
+
+It was placed last in the file on purpose: `snow sql -f` aborts on error, so a
+failure there would have left every deliverable already committed.
+
+### Failures in this part
+
+| | |
+|---|---|
+| Adjacent string literals across two lines in two `EXPECTED` arguments | Python's concatenation rule, not SQL's. Snowflake parsed the first literal as the argument and hit the second with no operator. Scoring had already finished and one check had passed; only the last two checks were lost. Joined with `\|\|` |
+| `MAX(MODEL_VERSION)` to find the latest run | A string max — `'V9' > 'V10'`. Caught before running, but it would only have bitten on the second training run, which is when nobody looks |
+| Scalar subqueries in the coefficient checks | `SELECT COEFFICIENT ... WHERE FEATURE = 'F_DIST_5'` returns one row today and two after a retrain. Caught before running, same reason |
+| `X / 5.0 ::FLOAT` | Casts the literal, not the expression. It happened to yield FLOAT by numeric promotion, which is worse than failing. Parenthesised |
+| `OBJECT_AGG(...) ... GROUP BY SPLIT` in a scalar slot | Returns one row per group. Collapsed the grouping first |
+| Predicted test AUC 0.66–0.74 | Actual 0.6479. Below the stated range |
+
+### What Part 9 did not need
+
+`RANGE BETWEEN 3600000 PRECEDING AND 1 PRECEDING` was flagged UNVERIFIED with a
+self-join fallback written beside it, on the grounds that Snowflake historically
+allowed only `UNBOUNDED` and `CURRENT ROW` in a RANGE frame. **Numeric offsets
+work.** The fallback stays in the file as a comment.
+
+The joblib + stage round trip likewise works and is not needed, since the
+Registry does.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -540,7 +736,7 @@ by lifecycle rule; `archive/`, `external/` and `docs/` do not, and the Iceberg
 metadata in `archive/` must not be deleted while `RAW.ORDER_EVENTS_ICEBERG`
 exists.
 
-**Still unset: the account budget.** Twelve routes have run against an account
+**Still unset: the account budget.** Fourteen routes have run against an account
 whose only spending control cannot see Snowpipe, Snowpipe Streaming or the
 Python UDFs that mechanisms 10 and 11 will add. 3.78 credits is the last
 verified figure and it predates Parts 3 through 6 entirely. Snowsight -> Admin
@@ -567,29 +763,43 @@ Mechanisms 10-14 do not touch the source stack at all.
 
 | | |
 |---|---|
-| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Nine ingestion mechanisms have now run against an account with no serverless cap at all |
+| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, a CORE build, a MART build and a registered model have now run against an account with no serverless cap at all |
 | **Credits backfill** | `sql/p3_credits_backfill.sql`, once `ACCOUNT_USAGE` has caught up. The ~3 h latency means Part 3-5 spend is still unmeasured. 3.78 credits is the last verified figure and it predates all of it |
 
 The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
 (`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
 rather than by `SHOW`.
 
-### 3. Ingestion is closed at 13 of 14
+### 3. Where the build stands
 
-Nothing is left to run in the ingestion stage. Mechanism 11 is not deferred, it
-is unavailable: external access is refused on a trial account and no rework
-reaches it. `sql/p6_external_access.sql` stops at the wall by design.
+| Stage | State |
+|---|---|
+| Ingestion | closed at 13 of 14. Mechanism 11 is not deferred, it is unavailable — external access is refused on a trial account and no rework reaches it. `sql/p6_external_access.sql` stops at the wall by design |
+| `CORE` | complete — Part 7 |
+| `MART` | complete — Part 8, 9 dbt models, 42 tests passing |
+| `LAB` | complete — Part 9, model registered and scoring |
 
-Next is **Part 6 — `CORE`**: dedupe, SCD2, conformance. The first job is the one
-`RAW` deliberately did not do. Three tables hold the same 79,663 events, and
-within each there is a 1% duplicate rate and 2% out-of-order transitions the
-generator injected on purpose.
+**Next is Part 10 — text and classification, without Cortex.** The inputs are
+already landed: 300 complaint PDFs in `RAW.COMPLAINT_DOC` via the directory
+table, 60 hand-labelled rows in `RAW.COMPLAINT_LABEL`, and 10 reason codes in
+`RAW.COMPLAINT_REASON_CODE`. `source/out/*_truth.csv` holds the full answer key
+and is **deliberately not uploaded** — the 60 labels are the training set and
+the other 240 have to be earned.
 
-Carry one lesson from mechanism 10 straight into it: **a stream is the delta,
-never the backfill.** `CORE` gets streams over `RAW`, and the same split applies
--- backfill the history once from the table, then let the stream carry what
-arrives after. `CREATE OR REPLACE STREAM` resets the offset and is how the 300
-pending files were lost.
+Part 9 settled the two things Part 10 depends on:
+
+- **The Model Registry works**, with `options={"embed_local_ml_library": True}`.
+  Without it, `log_model` builds an inference function against
+  `snowflake-ml-python >=2.0,<3` and the channel carries 1.9.2.
+- **`pypdf 6.18.0` is importable in a Snowpark UDF**, proved in
+  `sql/p6_pkg_probe.sql`. The Anaconda ToS gate two sessions of planning
+  assumed would block this **does not exist on this account**.
+
+Carry two lessons forward. From mechanism 10: **a stream is the delta, never the
+backfill** — `CREATE OR REPLACE STREAM` resets the offset and is how 300 pending
+files were lost. From Part 9: **a marginal relationship can be flat or reversed
+while the conditional one is strong**, so a quartile table is description, never
+evidence.
 
 ### Row counts as they stand
 
@@ -614,9 +824,21 @@ pending files were lost.
 | `RAW.V_FX_INR_USD` | 15,683 | 12 - a view over a share, nothing copied |
 | — | — | 11 - blocked, trial account |
 
-`CORE`, `MART`, `SERVE` and `LAB` are empty. Nothing has been deduped: the three
-order-status tables hold the same 79,663 events three times over by design, and
-resolving that is what `CORE` is for.
+Downstream of `RAW`, as built:
+
+| Target | Rows | Part |
+|---|---|---|
+| `CORE.ORDER_HEADER` / `ORDER_ITEM` / `ORDER_STATUS_EVENT` | 20,000 / 54,635 / 78,874 | 7 |
+| `CORE.INVENTORY_DAILY` | 96,000 | 7 |
+| `CORE.CUSTOMER` / `PRODUCT` / `RIDER` / `STORE` | 500 / 200 / 60 / 8 | 7 |
+| `CORE.DIM_PRODUCT` | 220 — 200 current, 20 closed | 7, SCD2 |
+| `CORE.ORDER_FUNNEL` / `ORDER_CANCELLED` / `ORDER_LIFECYCLE_ANOMALY` | 19,029 / 623 / 348 | 7, partitions 20,000 exactly |
+| `MART` — 9 models | `dim_date` 213, dims 500/220/60/8, `fct_order` 20,000, `fct_order_item` 54,635, `fct_order_status_event` 78,874, `fct_inventory_daily` 96,000 | 8 |
+| `LAB.ORDER_FEATURES` | 19,377 | 9 |
+| `LAB.ORDER_SCORES` | 19,377 | 9 |
+| `LAB.SLA_BREACH` | model, V1 | 9 |
+
+`SERVE` is still empty — that is Part 13.
 
 ---
 
@@ -633,3 +855,17 @@ resolving that is what `CORE` is for.
 | `sql/p2_integrations.sql` | External volume, integrations, stages, file formats |
 | `scripts/p2_azure.sh` | Azure resources. Read-only unless `CREATE=1` |
 | `scripts/p2_rbac.sh` | Role assignments for both service principals |
+| `sql/p3_*` – `sql/p6_*` | Ingestion, mechanisms 1-14. `p6_external_access.sql` stops at the trial wall |
+| `sql/p7_core_*.sql` | CORE — conformance, SCD2, `MATCH_RECOGNIZE` funnel |
+| `sql/p8_grants.sql` | `ON ALL` + `ON FUTURE` for `QC_ENGINEER`. A schema grant is not an object grant |
+| `sql/p9_features.sql` | `LAB.ORDER_FEATURES` — leakage-free, in the generator's own scaling |
+| `sql/p9_train.sql` | Training sproc, Model Registry, `OPS.MODEL_METRICS` + `MODEL_COEFFICIENTS` |
+| `sql/p9_score.sql` | Warehouse-side scoring, decile lift, calibration, SQL model surface |
+| `sql/p9_report.sql` | Read-only reprint of the Part 9 results. No DDL, no DML, no refit |
+| `sql/p9_ml_probe.sql`, `sql/p9_registry_fix.sql` | What ML this account permits, and the three registry variants |
+| `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
+| `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
+| `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |
+| `scripts/p7_cdc_sink.sh` | Second v4 sink for the CDC topics. `create` redacts the private key |
+| `scripts/p7_source_reset.sh` | Full `down -v` rebuild. Dry-run unless `RESET=1` |
+| `scripts/p7_mutate_source.sh` | Deterministic Postgres mutations. `APPLY=1` to run |

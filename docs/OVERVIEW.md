@@ -4,7 +4,7 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance and the dimensional model complete.**
+**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model and predictive scoring complete.**
 
 ---
 
@@ -86,6 +86,7 @@ automated quality tests.
 | Transformation framework | SQL transformation + testing | dbt |
 | In-warehouse compute | DataFrame / UDF runtime | Snowpark (Python) |
 | Machine learning | Classical ML | `SNOWFLAKE.ML` functions and scikit-learn in Snowpark |
+| Model management | Model registry | Snowflake Model Registry — versions, metrics, signature, SQL-callable inference |
 | Document parsing | PDF text extraction | `pypdf` in a Python UDF |
 | Application layer | Embedded data app | Streamlit in Snowflake |
 | CI/CD | Pipeline automation | GitHub Actions + Snowflake Git integration |
@@ -138,7 +139,7 @@ Routes 1, 2 and 3 carry **identical input** so their latency and cost can be
 compared with the data held constant. That comparison is the deliverable, not
 the ingestion.
 
-Route 11 is refused by the account tier. See §10.
+Route 11 is refused by the account tier. See §11.
 
 ---
 
@@ -151,7 +152,8 @@ Route 11 is refused by the account tier. See §10.
 | Queried in place | 2,800 | Partner files, never copied |
 | Read live from a publisher | 15,683 | Marketplace share, never stored |
 | `MART` | 250,510 | 9 tables, dimensional model |
-| `SERVE`, `LAB` | **0** | Not started |
+| `LAB` | 38,754 | Feature table and scores, 19,377 rows each, plus one registered model |
+| `SERVE` | **0** | Not started |
 
 `CORE` in detail:
 
@@ -177,7 +179,52 @@ three were proved to carry identical event sets.
 
 ---
 
-## 8. Access model
+## 8. Predictive scoring
+
+One model, in production shape: given an order at the moment it is placed,
+the probability it will be delivered after its promised time.
+
+| | |
+|---|---|
+| Training | In-database, as a stored procedure. Data never leaves the platform |
+| Model storage | Model registry [Snowflake Model Registry], versioned, with metrics and signature |
+| Inference | Runs on warehouse compute, callable from SQL or from the Python API — both verified to return identical values |
+| Output | `LAB.ORDER_SCORES`, one probability per order |
+
+**Only information available at order placement is used.** The delivery
+milestones, the leg durations and the assigned rider are all excluded: each is
+recorded after the fact, and a model trained on them would score perfectly in
+testing and be worthless in operation. Cancelled orders are excluded entirely
+rather than recorded as "not late", because they have no delivery outcome.
+
+The training and test sets are split by **date**, not at random — 45 days to
+train, the following 15 to test. A random split lets the model be tested on the
+same store-hours it was trained on.
+
+| Measured on 15 unseen days | |
+|---|---|
+| Orders scored | 19,377 |
+| Ranking quality (ROC AUC) | 0.648 |
+| Calibration | Predicted late-rate within 0.7 points of actual |
+| Riskiest tenth of orders | 34.7% late, against 16.1% overall |
+| Safest tenth | 7.3% late |
+
+The operational reading is the last two rows. Ranking orders by risk and acting
+on the riskiest tenth reaches orders that are **more than twice** as likely to
+be late as an untargeted sample, and **4.7 times** as likely as the safest
+tenth. Calibration matters as much as ranking: a score of 0.30 means close to 30
+orders in 100, so a threshold can be set against a staffing budget rather than
+guessed.
+
+The four drivers the model relies on — distance, time of day, store congestion
+and basket size — were confirmed against the known behaviour of the source
+system, and two deliberately meaningless inputs were included as controls. Both
+came back at effectively zero weight, which is the evidence that the model is
+reading signal rather than noise.
+
+---
+
+## 9. Access model
 
 | Role | Grants |
 |---|---|
@@ -195,7 +242,7 @@ and row policies) and approximated through restricted views — and compares the
 
 ---
 
-## 9. Cost controls
+## 10. Cost controls
 
 | Control | Setting |
 |---|---|
@@ -215,7 +262,7 @@ Confirmed spend: 3.78 credits. That figure predates all ingestion work.
 
 ---
 
-## 10. Platform constraints
+## 11. Platform constraints
 
 Three properties of this account shaped the design. All three were established by
 attempting the operation, not by reading a privileges listing.
@@ -227,12 +274,18 @@ attempting the operation, not by reading a privileges listing.
 | **Outbound network access unavailable** — account tier | Route 11 cannot be built. The network rule and the secret both create successfully; only the integration that binds them to a function is refused |
 
 Route 11's payload was weather per store. Nothing downstream depends on it — the
-risk model's features are distance, hour of day, store load, basket size and
-rider assignment. The route is kept in the repository as design, not deleted.
+risk model's features are distance, hour of day, store congestion and basket
+size. The route is kept in the repository as design, not deleted.
+
+A fourth constraint was expected and did not materialise: the model registry
+refused to register a model until one non-default option was supplied, which
+looked like an account-tier block and is not. It is a version mismatch between
+the client library and the package channel, and it is worked around inside the
+training procedure.
 
 ---
 
-## 11. Build status
+## 12. Build status
 
 | Stage | Status |
 |---|---|
@@ -243,7 +296,7 @@ rider assignment. The route is kept in the repository as design, not deleted.
 | **Ingestion** | **Complete — 13 of 14 routes** |
 | **Cleaning and conformance** (`CORE`) | **Complete** |
 | **Dimensional model** (`MART`) | **Complete** |
-| Risk scoring | Not started |
+| **Risk scoring** | **Complete** |
 | Forecasting and text analysis | Not started |
 | Application layer | Not started |
 | Governance | Not started |
@@ -251,7 +304,7 @@ rider assignment. The route is kept in the repository as design, not deleted.
 
 ---
 
-## 12. Repository
+## 13. Repository
 
 | Path | Contents |
 |---|---|

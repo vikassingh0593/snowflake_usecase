@@ -316,6 +316,13 @@ size and category mix · store trailing 7-day SLA rate.
 Plus one **Snowpark pandas (Modin)** notebook, showing pandas semantics on warehouse
 compute.
 
+> **As built, this is §16 "LAB as built — Part 9".** The design above assumes a
+> weather feature, which needs external access and is blocked (§1 Finding 3),
+> and a local Snowpark session, which the arm64 gap rules out. Training moved
+> inside the account as a stored procedure and the feature set is the four
+> drivers the source system actually uses. Feature Store, UDTF and Modin are not
+> built.
+
 ---
 
 ## 11. ML and text — built without Cortex
@@ -325,7 +332,7 @@ compute.
 | Demand forecast, store × category × day | `SNOWFLAKE.ML.FORECAST` |
 | Ping-volume anomalies per store | `SNOWFLAKE.ML.ANOMALY_DETECTION` |
 | Why did SLA drop last Tuesday | `SNOWFLAKE.ML.TOP_INSIGHTS` |
-| Complaint → reason code | sklearn classifier, Snowpark sproc, **Model Registry** |
+| Complaint → reason code | sklearn classifier, Snowpark sproc, **Model Registry** — see the `embed_local_ml_library` requirement below |
 | Sentiment | lexicon UDF, or a second head on the same classifier |
 | Order id from free text | **regex UDF** — always the right tool for a numeric id |
 | Complaint PDFs from the directory table | **`pypdf`** in a Snowpark UDF |
@@ -334,7 +341,17 @@ compute.
 | Semantic view | hand-written; Autopilot needs an LLM |
 
 `SNOWFLAKE.ML` functions are classical ML, not LLM inference, so the trial AI gate does
-not apply — confirm by training one before building on them.
+not apply — confirmed by training one. `FORECAST` returned a correctly extended trend
+and `ANOMALY_DETECTION` created without complaint.
+
+**The Model Registry needs one non-default option on this account.** `log_model` builds
+the model's inference function with `snowflake-ml-python >=2.0,<3` as a runtime
+dependency and the Anaconda channel carries 1.9.2, so function creation fails with
+`391525 ... Packages not found`. Passing `options={"embed_local_ml_library": True}`
+ships the library inside the model artefact and there is nothing left to resolve.
+Pinning scikit-learn through `conda_dependencies` does **not** fix it — the constraint
+comes from the Registry's own dependency, not the model's — and that was established by
+running all three variants, not by reasoning about them.
 
 The vector search is **lexical, not semantic**, and the write-up should say so. The
 upgrade path is staging `all-MiniLM-L6-v2` (~90 MB) and running it inside the UDF.
@@ -595,13 +612,88 @@ for `CORE`, `RAW` and `OPS` — neither implies the other.
 `macros/generate_schema_name.sql` stops dbt concatenating `target.schema` with
 the custom name.
 
+### LAB as built — Part 9
+
+`QCOMMERCE.LAB`, transient. Target: will this order be delivered after its
+`promised_ts`, decided at placement.
+
+| Object | What |
+|---|---|
+| `LAB.ORDER_FEATURES` | 19,377 rows — one per delivered order. 6 fitting columns, 2 of them placebos |
+| `LAB.SLA_BREACH` | registered model, version `V1`, default set |
+| `LAB.ORDER_SCORES` | 19,377 scored rows, written by the warehouse-side inference function |
+| `LAB.SP_TRAIN_SLA_MODEL()` | fits, evaluates, registers, writes metrics and coefficients |
+| `LAB.SP_SCORE_SLA(STRING)` | batch scoring; discovers the probability column names rather than assuming them |
+| `LAB.STG_MODELS` | joblib fallback stage. Proven to round-trip, not needed |
+| `OPS.MODEL_METRICS` | one row per version per split per metric |
+| `OPS.MODEL_COEFFICIENTS` | fitted weight beside the weight the source system used |
+
+**Features are leakage-free by construction.** Everything recorded after
+`PLACED_TS` is excluded — the four milestone timestamps, the three leg
+durations, `lifecycle_outcome`, and `rider_sk`, the last because rider
+availability is a consequence of the same congestion being predicted. CANCELLED
+orders are dropped rather than labelled not-breached: they have no delivery
+outcome, and labelling them clean teaches the model a fact about the label
+definition instead of about the world.
+
+**Features are built in the source generator's own scaling**, so the fitted
+coefficients compare directly against the weights that produced the data:
+
+```
+-3.05 + 0.85*(dist_km/5) + 0.55*peak + 0.70*(min(load,15)/15) + 0.25*(items/5) + N(0, 0.50)
+```
+
+Two placebos with a true weight of zero are fitted alongside the four drivers.
+They came out −0.0146 (`F_WEEKEND`) and −0.0509 (`F_COD`). `penalty=None`,
+because L2 shrinkage would be indistinguishable from the attenuation the
+unobserved noise term causes, and the whole point is to read the coefficients.
+
+| Measured | |
+|---|---|
+| Split | 45 days train / 15 days test, strictly temporal |
+| Train / test | 14,600 at 16.49% breached / 4,777 at 16.12% |
+| Test ROC AUC | 0.6479 |
+| Calibration | within 0.70 points overall; within 1.4 points across 4,545 of 4,777 test orders |
+| Top decile | 34.73% breach vs 7.34% bottom — 4.73×, 2.15× over base |
+| `HAVERSINE` vs `ST_DISTANCE` | 0 m difference across 19,377 rows |
+| Checks | 12, all passing |
+
+0.6479 is near this problem's ceiling rather than a weak fit: the generator adds
+unobserved `N(0, 0.50)` to the logit and then draws the outcome from a
+Bernoulli, so a model holding the true coefficients would score similarly.
+
+**A confound worth recording.** Store congestion has a true weight of +0.70 and
+its *marginal* breach rate falls across its own quartiles, 17.09% down to
+15.73%. Customers route to their nearest store, so a busy store is one whose
+customers are close, and distance — worth up to 3.8 in the logit against load's
+~0.2 — points the other way and buries it. The multivariate fit recovers the
+positive coefficient. A quartile table is description, not evidence.
+
+**Both inference surfaces agree.** Snowpark `ModelVersion.run()` and the SQL
+form below hit the same generated function and returned identical probabilities
+on every sampled row:
+
+```sql
+WITH sla AS MODEL QCOMMERCE.LAB.SLA_BREACH
+SELECT sla!PREDICT_PROBA(F_DIST_5, F_PEAK, F_LOAD_15, F_ITEMS_5, F_WEEKEND, F_COD)
+FROM   LAB.ORDER_FEATURES;
+```
+
+Returns an OBJECT keyed `output_feature_0` / `output_feature_1`.
+
+**Two things flagged UNVERIFIED that turned out to work**: numeric offsets in a
+`RANGE` window frame (`RANGE BETWEEN 3600000 PRECEDING AND 1 PRECEDING`), and
+the `WITH ... AS MODEL` SQL surface. The self-join fallback for the first stays
+in `p9_features.sql` as a comment.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
   still not set. `RM_POC` sees virtual-warehouse credits only; Snowpipe,
   Snowpipe Streaming, dynamic table refresh and search optimization are all
-  invisible to it. Nine ingestion mechanisms have now run without it. Snowsight
-  -> Admin -> Cost Management -> Budgets, 80 credits.
+  invisible to it. Thirteen ingestion mechanisms, a CORE build, a MART build and
+  a registered model have now run without it. Snowsight -> Admin -> Cost
+  Management -> Budgets, 80 credits.
 - **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
   catches up (~3 h). 3.78 credits predates Parts 3-5 entirely.
 - **Mechanism 11 only, and not by choice.** External access is refused on a
@@ -613,9 +705,14 @@ the custom name.
   3.14 are available; UDFs here pin 3.11 because that is the one a real
   execution proved.
 - **A native arm64 interpreter.** Mechanisms 13 and 14 sidestepped it by running
-  in containers, as mechanism 2 did. Part 9 cannot: Snowpark and
-  `snowflake-ml-python` want to be on the Mac itself.
-- **`SERVE` and `LAB`.** Risk scoring, forecasting, the application layer and governance.
+  in containers, as mechanism 2 did. Part 9 was expected to need one and did
+  not: training moved inside the account as a Python stored procedure, so
+  Snowpark and `snowflake-ml-python` never had to run on the Mac. dbt takes the
+  container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
+- **`SERVE`.** The application layer, Part 13. `LAB` is built — Part 9.
+- **Parts 10 through 15.** Text and classification without Cortex (10),
+  Streamlit in Snowflake (11), governance (12), `SERVE` (13), CI/CD (14), the
+  cost model closed out against measured credits (15).
 
 ---
 
