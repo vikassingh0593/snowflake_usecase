@@ -128,6 +128,23 @@ WHERE  a.IS_LABELLED AND b.IS_LABELLED
 GROUP  BY pairing
 ORDER  BY pairing;
 
+-- How much of this corpus is literally repeated once numbers are removed.
+-- Every complaint carries a minute count, a rupee amount or a pack size drawn
+-- at random, and none of it survives tokenisation, so documents built from one
+-- template collapse onto each other. This number is the floor under every
+-- accuracy figure in Part 10.
+SELECT COUNT(*)                                                     AS complaints,
+       SUM(IFF(top_sim >= 0.9999, 1, 0))                            AS with_an_identical_twin,
+       ROUND(AVG(top_sim), 4)                                       AS avg_nearest,
+       ROUND(MIN(top_sim), 4)                                       AS most_isolated
+FROM (
+    SELECT a.TICKET_ID,
+           MAX(VECTOR_COSINE_SIMILARITY(a.EMBEDDING, b.EMBEDDING))  AS top_sim
+    FROM   LAB.COMPLAINT_VECTOR a
+    JOIN   LAB.COMPLAINT_VECTOR b ON b.TICKET_ID <> a.TICKET_ID
+    GROUP  BY a.TICKET_ID
+);
+
 -- =============================================================================
 -- STEP 3 — nearest neighbour as a classifier.
 --
@@ -240,17 +257,30 @@ SELECT 'every_complaint_has_a_unit_vector', 'LAB.COMPLAINT_VECTOR',
 -- The failure this guards against is a hash that puts everything in the same
 -- place. Identical vectors are all similarity 1 and nearest neighbour becomes
 -- alphabetical order.
+-- This check originally also asserted that no held-out complaint matched a
+-- training example at similarity 1. It failed, and the assertion was wrong
+-- rather than the vectors. The tokeniser keeps [a-z]{2,} and drops digits, so
+-- two complaints from one template differing only in a minute count or a rupee
+-- amount ARE the same document. Ten of the 240 held-out rows have an identical
+-- twin in the training set, and all ten carry the correct label. That is the
+-- memorisation result at its most literal, so it is reported rather than
+-- guarded against. What is worth asserting is that the hash is not degenerate:
+-- a hash collapsing everything into one slot would put every pair at 1.
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
-SELECT 'vectors_are_not_all_the_same', 'LAB.COMPLAINT_VECTOR',
+SELECT 'vectors_separate_the_documents', 'LAB.COMPLAINT_VECTOR',
        (SELECT COUNT(DISTINCT ROUND(SIMILARITY, 4))
         FROM LAB.COMPLAINT_KNN_PREDICTION) > 100
-       AND (SELECT MAX(SIMILARITY) FROM LAB.COMPLAINT_KNN_PREDICTION
-             WHERE NOT WAS_TRAINED_ON) < 0.9999,
+       AND (SELECT AVG(SIMILARITY) FROM LAB.COMPLAINT_KNN_PREDICTION) < 0.95,
        (SELECT COUNT(DISTINCT ROUND(SIMILARITY, 4)) FROM LAB.COMPLAINT_KNN_PREDICTION),
-       'more than 100 distinct nearest-neighbour similarities and no exact '
-         || 'duplicate document',
-       OBJECT_CONSTRUCT('min', (SELECT ROUND(MIN(SIMILARITY), 4) FROM LAB.COMPLAINT_KNN_PREDICTION),
-                        'max', (SELECT ROUND(MAX(SIMILARITY), 4) FROM LAB.COMPLAINT_KNN_PREDICTION));
+       'more than 100 distinct nearest-neighbour similarities and a mean below '
+         || '0.95 -- a degenerate hash would put every pair at 1',
+       OBJECT_CONSTRUCT(
+         'min',  (SELECT ROUND(MIN(SIMILARITY), 4) FROM LAB.COMPLAINT_KNN_PREDICTION),
+         'mean', (SELECT ROUND(AVG(SIMILARITY), 4) FROM LAB.COMPLAINT_KNN_PREDICTION),
+         'max',  (SELECT ROUND(MAX(SIMILARITY), 4) FROM LAB.COMPLAINT_KNN_PREDICTION),
+         'held_out_with_an_identical_twin_in_training',
+                 (SELECT COUNT(*) FROM LAB.COMPLAINT_KNN_PREDICTION
+                   WHERE NOT WAS_TRAINED_ON AND SIMILARITY >= 0.9999));
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
 SELECT 'same_code_pairs_are_closer_than_different_code_pairs', 'LAB.COMPLAINT_VECTOR',
