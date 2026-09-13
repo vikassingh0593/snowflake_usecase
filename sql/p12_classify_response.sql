@@ -51,8 +51,13 @@ CREATE TABLE IF NOT EXISTS GOV.CLASSIFICATION_RESULT (
 INSERT INTO GOV.CLASSIFICATION_RESULT
   (OBJECT_NAME, COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY,
    CONFIDENCE, COVERAGE, RAW)
+-- No PARSE_JSON. On this account EXTRACT_SEMANTIC_CATEGORIES already returns
+-- an OBJECT, and wrapping it gives "Invalid argument types for function
+-- 'PARSE_JSON': (OBJECT)". The first version assumed a JSON string because the
+-- probe's output RENDERED as pretty-printed JSON, which is just how Snowflake
+-- displays a VARIANT. FLATTEN takes the object directly.
 WITH raw AS (
-    SELECT PARSE_JSON(EXTRACT_SEMANTIC_CATEGORIES('QCOMMERCE.MART.DIM_CUSTOMER')) AS j
+    SELECT EXTRACT_SEMANTIC_CATEGORIES('QCOMMERCE.MART.DIM_CUSTOMER') AS j
 )
 SELECT 'QCOMMERCE.MART.DIM_CUSTOMER',
        f.key,
