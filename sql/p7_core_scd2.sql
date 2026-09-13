@@ -206,7 +206,18 @@ WITH snapshot AS (
 SELECT MD5(PRODUCT_ID::STRING || '|' || CDC_TS::STRING) AS PRODUCT_SK,
        PRODUCT_ID, SKU, PRODUCT_NAME, CATEGORY_L1, CATEGORY_L2, CATEGORY_L3,
        PRICE_PAISE, IS_ACTIVE,
-       CDC_TS AS VALID_FROM,
+       -- VALID_FROM is an OPEN LOWER BOUND, not the capture timestamp.
+       --
+       -- A snapshot says what the state IS, not when it started being that. The
+       -- Debezium snapshot ran on 2026-09-11; these 200 products existed for
+       -- months before it. Stamping version 1 with the capture time asserts that
+       -- nothing existed beforehand, and every fact dated earlier then falls
+       -- outside every validity range and joins to nothing.
+       --
+       -- That is not hypothetical: it emptied product_sk for all 54,635 rows of
+       -- MART.fct_order_item, and only the not-null test caught it. The
+       -- relationships test passed, because relationship tests ignore nulls.
+       '1900-01-01'::TIMESTAMP_NTZ AS VALID_FROM,
        NULL   AS VALID_TO,
        TRUE   AS IS_CURRENT,
        MD5(CONCAT_WS('|', PRODUCT_NAME, CATEGORY_L3,
