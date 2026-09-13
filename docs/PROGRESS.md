@@ -708,6 +708,198 @@ Registry does.
 
 ---
 
+## Part 10 — text and classification, without Cortex
+
+300 complaint PDFs, ten reason codes, 60 hand labels. Classify the other 240.
+Files: `p10_text_prep.sql`, `p10_classify.sql`, `p10_eval.sql`, `p10_vectors.sql`,
+`p10_eval_compare.sql`, and `scripts/p10_truth.sh`.
+
+### The answer key is kept where the model cannot reach it
+
+`source/out/_truth.csv` was withheld from upload in Part 6 so the classifier
+would have to earn the 240. Scoring still needs it, so it is regenerated rather
+than recovered -- `gen_complaints.py` is seeded -- and loaded to a Snowflake
+**internal stage** and a table in `OPS`, never to the Azure container holding
+the documents and never into `RAW` or `CORE`.
+
+The script proves the regeneration is faithful before uploading anything: it
+diffs the regenerated dbt seeds against the committed ones and stops if they
+differ, because a drifted generator would produce a key describing documents
+other than the ones in the account.
+
+The separation is greppable, not promised:
+
+```
+grep -v '^--' sql/p10_classify.sql | grep -c COMPLAINT_TRUTH    -> 0
+```
+
+Comment lines are excluded deliberately. The first version of that check
+counted 2, both in the comment explaining the check — a verification its own
+description defeats is worthless.
+
+### A generator bug, corrected in CORE rather than at source
+
+`gen_complaints.py:38` says "must match generate.py, so order ids resolve".
+They do not. `generate.py` issues 900,000–919,999; `gen_complaints.py` draws
+`randint(1, 20_000)`. **The ranges do not overlap at all** — every complaint
+referenced an order that does not exist.
+
+`CORE.COMPLAINT` adds 899,999, which maps the draw one-to-one onto the real id
+space and preserves its distribution. Fixing the generator instead would change
+every complaint body that interpolates an order id, three of the ten codes, and
+require all 300 PDFs regenerated and re-uploaded. The correction lives in one
+place where it cannot be applied twice.
+
+### What the corpus actually is
+
+Each reason code is generated from **three sentence templates**. The 60 labels
+are a random 20% sample and not stratified, so template coverage is uneven:
+
+| coverage | classes | held-out | on a template never seen |
+|---|---|---|---|
+| 3 of 3 | LATE_DELIVERY, MISSING_ITEM, PAYMENT_ISSUE, REFUND_DELAY | 145 | 0 |
+| 2 of 3 | QUALITY_FRESH, WRONG_ITEM, DAMAGED_ITEM, RIDER_BEHAVIOUR | 80 | 26 |
+| **1 of 3** | **APP_ISSUE, PACKAGING** | 15 | 11 |
+
+203 of 240 held-out documents share a template with something in training. That
+sets a floor of **84.6% accuracy from memorisation alone**, against a 29.6%
+majority baseline.
+
+### The result, and what it actually measures
+
+| | |
+|---|---|
+| Held-out accuracy | **85.42%** (205 / 240) |
+| Macro-F1 | **0.7489** |
+| Macro-recall / macro-precision | 0.7373 / 0.8660 |
+| Majority baseline | 29.58% |
+| Memorisation floor | 84.58% |
+
+Accuracy clears the floor by **0.84 points**. Split by template coverage, the
+reason is not subtle:
+
+| phrasing | complaints | correct | accuracy |
+|---|---|---|---|
+| template seen in training | 203 | **203** | **100.00%** |
+| template never seen | 37 | **2** | **5.41%** |
+
+**Nine of the ten classes got exactly the seen-phrasing documents right** —
+exactly, not approximately. Only WRONG_ITEM beat that, by two.
+
+On genuinely novel phrasings the model scores 5.41%, **below the 10% a uniform
+guess over ten classes would score**, because its errors are systematic rather
+than random: unseen phrasings route to whichever class shares surface
+vocabulary, and MISSING_ITEM absorbs them at 57 predictions against a support
+of 46.
+
+The corpus makes this easy. Once digits are dropped by the tokeniser, 300
+documents collapse to **266 distinct token sequences**; 64 complaints have an
+exact duplicate somewhere, 10 of the held-out 240 are token-identical to a
+training example, and the average complaint's nearest neighbour sits at
+**0.908** cosine. The most isolated document in the corpus is still 0.4195 from
+something else.
+
+### The confidence score is the usable product
+
+| fifth | confidence | correct | accuracy |
+|---|---|---|---|
+| 1–4 | 0.235–0.537 | 192 / 192 | **100.0%** |
+| 5 | 0.119–0.235 | 13 / 48 | 27.1% |
+
+**All 35 errors sit in the bottom fifth.** A threshold at 0.235 auto-routes 80%
+of complaints with zero errors and sends 20% to a human. A model that cannot
+generalise at all still yields an operational rule, because the score knows
+what the classifier does not.
+
+### Cross-validation overestimated, and the reason is the useful part
+
+| | CV (2-fold) | held out |
+|---|---|---|
+| accuracy | 0.8500 | 0.8542 |
+| macro-F1 | **0.7777** | **0.7489** |
+
+I predicted CV would read **below** held-out, on the grounds that each fold
+trains on 30 rows rather than 60. It read above. Sample size was not the
+operative factor.
+
+CV draws its test rows from the same 60 labelled documents, so **every CV test
+row's template is present in the label pool by construction**. The 37 documents
+phrased in a way that appears nowhere in the 60 are invisible to it. Accuracy
+matched to half a point because head classes dominate it; macro-F1 diverged
+because that is where the tail shows.
+
+The general form: *k-fold cross-validation on a sample biased the same way as
+the training set reports the bias back as success.*
+
+### Two approaches, and why the agreement between them is worth less than it looks
+
+Approach B shares nothing with A but the input text and the 60 labels: signed
+feature hashing into a 256-dimensional unit vector, one nearest neighbour by
+cosine. No training step, no model artefact, no Python at inference.
+
+| | accuracy | macro-F1 | seen | unseen |
+|---|---|---|---|---|
+| A TF-IDF + logistic regression | 85.42% | 0.7489 | 203/203 | 2/37 |
+| B hashed vector + 1-NN | 84.58% | 0.7446 | 202/203 | 1/37 |
+
+**0.84 points apart, and identical per-class recall on 7 of 10 classes to three
+decimals.** Two unrelated lexical methods hitting the same ceiling is the
+evidence that the ceiling belongs to the corpus and the label sample. A third
+lexical model would not move it; more labels covering the missing templates, or
+a real embedding model in place of the hash, would.
+
+| | n | A right | B right | accuracy |
+|---|---|---|---|---|
+| the two agree | 218 (90.8%) | 202 | 202 | 92.7% |
+| the two disagree | 22 (9.2%) | 3 | 1 | 13.6% |
+
+Both got **exactly 202** of the 218 agreements right, so where they agree and
+are wrong they produce the same wrong label. Agreement is not independent
+evidence — the two fail identically because they read the same surface
+features. It is also the weaker router: confidence ≥ 0.235 gives 100% on 80% of
+the corpus, agreement gives 92.7% on 90.8%.
+
+### Sentiment is a lexicon, and it is labelled for what it measures
+
+A scalar Python UDF counting words from a fixed list. Every complaint is
+negative by construction, so this measures **intensity, not polarity**. The
+per-class table shows the limit plainly: MISSING_ITEM scores 4.33 and
+LATE_DELIVERY 2.41, which is an ordering of the word list rather than of
+operational severity. Not something to put in front of a user as sentiment.
+
+### Vectors are lexical, not semantic
+
+`VECTOR(FLOAT, 256)` and `VECTOR_COSINE_SIMILARITY` are native. An embedding
+model is not, because Cortex is unavailable, so the vectors come from signed
+feature hashing in a UDF. Two complaints are close when they share words. "The
+milk was warm" and "the cold chain failed" are unrelated to this UDF. The
+upgrade is staging `all-MiniLM-L6-v2` inside the UDF, and any write-up has to
+say which of the two it is doing.
+
+Same-code pairs sit at 0.4029 cosine, different-code pairs at 0.1898 — enough
+separation for nearest neighbour to work, which is why B lands where it does.
+
+### Failures in this part
+
+| | |
+|---|---|
+| Two adjacent string literals across lines | Python's concatenation rule, not SQL's. Killed `p10_eval.sql` after the scores were already written. Joined with `\|\|` |
+| `NTILE(...) OVER (...)` in a select list grouped by its alias | A window function is evaluated **after** `GROUP BY`, so it cannot be grouped by: "CONFIDENCE is not a valid group by expression". Killed both scripts. Fixed by assigning the tile in a subquery. A sweep found four more apparent instances, all false positives — a window over an aggregate, `SUM(COUNT(*)) OVER ()`, is legal |
+| A check that asserted no two complaints are token-identical | It failed, and **the assertion was wrong, not the data**. Digits are dropped by the tokeniser, so two complaints from one template differing only in a minute count are the same document. Rewritten to assert the hash is not degenerate, and the duplicate count is now reported rather than guarded against |
+| Predicted accuracy 88–93%, macro-F1 0.78–0.88 | Actual 85.42% and 0.7489. **Both below the stated range**, and the second time in two parts that the magnitudes came in low while the mechanism prediction held |
+| Predicted CV would read below held-out | It read above. See above — the reasoning was wrong, not just the number |
+
+### What was UNVERIFIED and turned out to work
+
+- **The Model Registry accepts a text pipeline.** `log_model` with
+  `sample_input_data` as a one-column STRING frame infers the signature and
+  registers. `COMPLAINT_REASON` V1 and V2 exist.
+- **`pypdf` in a Snowpark UDF**, settled back in `p6_pkg_probe.sql`. The
+  Anaconda ToS gate two sessions of planning assumed would block this does not
+  exist on this account.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -736,7 +928,7 @@ by lifecycle rule; `archive/`, `external/` and `docs/` do not, and the Iceberg
 metadata in `archive/` must not be deleted while `RAW.ORDER_EVENTS_ICEBERG`
 exists.
 
-**Still unset: the account budget.** Fourteen routes have run against an account
+**Still unset: the account budget.** Sixteen routes have run against an account
 whose only spending control cannot see Snowpipe, Snowpipe Streaming or the
 Python UDFs that mechanisms 10 and 11 will add. 3.78 credits is the last
 verified figure and it predates Parts 3 through 6 entirely. Snowsight -> Admin
@@ -763,7 +955,7 @@ Mechanisms 10-14 do not touch the source stack at all.
 
 | | |
 |---|---|
-| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, a CORE build, a MART build and a registered model have now run against an account with no serverless cap at all |
+| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, two CORE builds, a MART build and three registered model versions have now run against an account with no serverless cap at all |
 | **Credits backfill** | `sql/p3_credits_backfill.sql`, once `ACCOUNT_USAGE` has caught up. The ~3 h latency means Part 3-5 spend is still unmeasured. 3.78 credits is the last verified figure and it predates all of it |
 
 The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
@@ -775,31 +967,33 @@ rather than by `SHOW`.
 | Stage | State |
 |---|---|
 | Ingestion | closed at 13 of 14. Mechanism 11 is not deferred, it is unavailable — external access is refused on a trial account and no rework reaches it. `sql/p6_external_access.sql` stops at the wall by design |
-| `CORE` | complete — Part 7 |
+| `CORE` | complete — Parts 7 and 10 |
 | `MART` | complete — Part 8, 9 dbt models, 42 tests passing |
-| `LAB` | complete — Part 9, model registered and scoring |
+| `LAB` | complete — Parts 9 and 10, three registered model versions across two models |
 
-**Next is Part 10 — text and classification, without Cortex.** The inputs are
-already landed: 300 complaint PDFs in `RAW.COMPLAINT_DOC` via the directory
-table, 60 hand-labelled rows in `RAW.COMPLAINT_LABEL`, and 10 reason codes in
-`RAW.COMPLAINT_REASON_CODE`. `source/out/*_truth.csv` holds the full answer key
-and is **deliberately not uploaded** — the 60 labels are the training set and
-the other 240 have to be earned.
+**Next is Part 11 — Streamlit in Snowflake.** Everything it would display now
+exists: SLA risk scores per order, complaint classifications with a confidence
+band, the funnel and anomaly split, the DQ results table, and the model metrics
+across versions.
 
-Part 9 settled the two things Part 10 depends on:
+Two capability questions to settle by attempting them rather than by reading a
+privileges list, as with the three findings in §1 of `ARCHITECTURE.md`: whether
+Streamlit apps can be created on a trial account at all, and which package
+versions the app runtime carries, which is a different channel from the UDF
+runtime that `p6_pkg_probe.sql` measured.
 
-- **The Model Registry works**, with `options={"embed_local_ml_library": True}`.
-  Without it, `log_model` builds an inference function against
-  `snowflake-ml-python >=2.0,<3` and the channel carries 1.9.2.
-- **`pypdf 6.18.0` is importable in a Snowpark UDF**, proved in
-  `sql/p6_pkg_probe.sql`. The Anaconda ToS gate two sessions of planning
-  assumed would block this **does not exist on this account**.
+Carry three lessons forward.
 
-Carry two lessons forward. From mechanism 10: **a stream is the delta, never the
-backfill** — `CREATE OR REPLACE STREAM` resets the offset and is how 300 pending
-files were lost. From Part 9: **a marginal relationship can be flat or reversed
-while the conditional one is strong**, so a quartile table is description, never
-evidence.
+- From mechanism 10: **a stream is the delta, never the backfill.**
+  `CREATE OR REPLACE STREAM` resets the offset and is how 300 pending files
+  were lost.
+- From Part 9: **a marginal relationship can be flat or reversed while the
+  conditional one is strong**, so a quartile table is description, never
+  evidence.
+- From Part 10: **a check can encode a false belief about the data.** The one
+  asserting no two complaints are token-identical failed, and the data was
+  right. Before a red check is treated as a defect, establish which of the two
+  is wrong.
 
 ### Row counts as they stand
 
@@ -837,6 +1031,11 @@ Downstream of `RAW`, as built:
 | `LAB.ORDER_FEATURES` | 19,377 | 9 |
 | `LAB.ORDER_SCORES` | 19,377 | 9 |
 | `LAB.SLA_BREACH` | model, V1 | 9 |
+| `CORE.COMPLAINT` | 300 | 10 |
+| `LAB.COMPLAINT_VECTOR` | 300, `VECTOR(FLOAT, 256)` | 10 |
+| `LAB.COMPLAINT_PREDICTION` / `COMPLAINT_KNN_PREDICTION` | 300 / 300 | 10 |
+| `LAB.COMPLAINT_REASON` | model, V1 and V2 | 10 |
+| `OPS.COMPLAINT_TRUTH` | 300 — answer key, evaluation only | 10 |
 
 `SERVE` is still empty — that is Part 13.
 
@@ -863,6 +1062,11 @@ Downstream of `RAW`, as built:
 | `sql/p9_score.sql` | Warehouse-side scoring, decile lift, calibration, SQL model surface |
 | `sql/p9_report.sql` | Read-only reprint of the Part 9 results. No DDL, no DML, no refit |
 | `sql/p9_ml_probe.sql`, `sql/p9_registry_fix.sql` | What ML this account permits, and the three registry variants |
+| `sql/p10_text_prep.sql` | `CORE.COMPLAINT` — header split from prose, wrap undone, order id corrected |
+| `sql/p10_classify.sql` | TF-IDF + logistic regression, registered. Reads no answer key |
+| `sql/p10_vectors.sql` | Hashing UDF → `VECTOR(FLOAT, 256)`, cosine similarity, 1-NN, tone lexicon |
+| `sql/p10_eval.sql`, `sql/p10_eval_compare.sql` | The only files that read the answer key |
+| `scripts/p10_truth.sh` | Regenerates and loads the answer key. Dry-run unless `LOAD=1` |
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |

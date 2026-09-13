@@ -4,7 +4,7 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model and predictive scoring complete.**
+**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model, predictive scoring and text classification complete.**
 
 ---
 
@@ -139,7 +139,7 @@ Routes 1, 2 and 3 carry **identical input** so their latency and cost can be
 compared with the data held constant. That comparison is the deliverable, not
 the ingestion.
 
-Route 11 is refused by the account tier. See §11.
+Route 11 is refused by the account tier. See §12.
 
 ---
 
@@ -148,11 +148,11 @@ Route 11 is refused by the account tier. See §11.
 | Layer | Rows | Contents |
 |---|---|---|
 | `RAW` | ~548,000 | 21 tables, exactly as arrived. Includes 171,403 CDC rows |
-| `CORE` | 270,497 | 12 tables, typed, deduplicated, versioned |
+| `CORE` | 270,797 | 13 tables, typed, deduplicated, versioned |
 | Queried in place | 2,800 | Partner files, never copied |
 | Read live from a publisher | 15,683 | Marketplace share, never stored |
 | `MART` | 250,510 | 9 tables, dimensional model |
-| `LAB` | 38,754 | Feature table and scores, 19,377 rows each, plus one registered model |
+| `LAB` | 39,654 | Order features and scores at 19,377 rows each, complaint vectors and two sets of predictions at 300 each, three registered model versions |
 | `SERVE` | **0** | Not started |
 
 `CORE` in detail:
@@ -224,7 +224,57 @@ reading signal rather than noise.
 
 ---
 
-## 9. Access model
+## 9. Complaint classification
+
+Three hundred customer complaints arrive as PDF documents. Sixty were read and
+categorised by hand into ten reason codes. The platform assigns codes to the
+other 240.
+
+| | |
+|---|---|
+| Text extraction | PDF parsing inside the warehouse, on documents read directly from object storage |
+| Approach A | Term weighting into a linear classifier, trained in-database and versioned in the model registry |
+| Approach B | Text hashed into a 256-dimension vector, classified by nearest neighbour — no model artefact at all |
+| Similarity search | Native vector type and cosine similarity: "show me complaints like this one" |
+| Evaluation | Against a withheld answer key held in a separate schema no training step can reach |
+
+| Measured on the 240 unseen complaints | A | B |
+|---|---|---|
+| Correct | 85.4% | 84.6% |
+| Balanced across all ten codes (macro-F1) | 0.749 | 0.745 |
+| Always guessing the commonest code | 29.6% | 29.6% |
+
+**The accuracy figure overstates what this can do, and the platform is set up
+to show that rather than hide it.** The complaints were written from a limited
+set of phrasings. Where a complaint is worded like one of the sixty examples,
+both approaches are essentially perfect. Where it is worded in a way neither
+has seen, both fall to near zero — worse than random guessing, because the
+errors are not random: an unfamiliar complaint is filed under whichever
+category shares the most ordinary words with it.
+
+Two methods with nothing in common land less than a point apart. That is the
+useful conclusion: **the limit is the sixty labels, not the modelling.** More
+models will not help. More labels, chosen to cover phrasings the current sixty
+miss, will.
+
+**What is usable today is the confidence score rather than the classification.**
+Every error the system makes falls in the least-confident fifth of its
+predictions. Setting a threshold there routes 80% of complaints automatically
+with no errors at all, and sends the remaining 20% to a person. A model that
+cannot generalise still produces a working triage rule, because it reliably
+signals when it does not know.
+
+Two further capabilities are built and both are labelled for what they are.
+Similarity search is **lexical** — it finds complaints sharing words, not
+complaints sharing meaning — because a managed embedding model is unavailable
+on this account tier. Tone scoring counts words from a fixed list, and since
+every complaint is negative by definition it measures **intensity, not
+sentiment**; its per-category ordering reflects the word list rather than
+operational severity, and it is not presented to users as sentiment.
+
+---
+
+## 10. Access model
 
 | Role | Grants |
 |---|---|
@@ -242,7 +292,7 @@ and row policies) and approximated through restricted views — and compares the
 
 ---
 
-## 10. Cost controls
+## 11. Cost controls
 
 | Control | Setting |
 |---|---|
@@ -262,7 +312,7 @@ Confirmed spend: 3.78 credits. That figure predates all ingestion work.
 
 ---
 
-## 11. Platform constraints
+## 12. Platform constraints
 
 Three properties of this account shaped the design. All three were established by
 attempting the operation, not by reading a privileges listing.
@@ -285,7 +335,7 @@ training procedure.
 
 ---
 
-## 12. Build status
+## 13. Build status
 
 | Stage | Status |
 |---|---|
@@ -297,14 +347,15 @@ training procedure.
 | **Cleaning and conformance** (`CORE`) | **Complete** |
 | **Dimensional model** (`MART`) | **Complete** |
 | **Risk scoring** | **Complete** |
-| Forecasting and text analysis | Not started |
+| **Text classification** | **Complete** |
+| Forecasting | Not started |
 | Application layer | Not started |
 | Governance | Not started |
 | Outbound sharing | Not started |
 
 ---
 
-## 13. Repository
+## 14. Repository
 
 | Path | Contents |
 |---|---|

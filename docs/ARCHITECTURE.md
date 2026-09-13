@@ -686,6 +686,84 @@ Returns an OBJECT keyed `output_feature_0` / `output_feature_1`.
 the `WITH ... AS MODEL` SQL surface. The self-join fallback for the first stays
 in `p9_features.sql` as a comment.
 
+### Text and classification as built — Part 10
+
+300 complaint PDFs, ten reason codes, 60 hand labels, 240 to classify. Built
+without Cortex, which is unavailable (§1 Finding 1).
+
+| Object | What |
+|---|---|
+| `CORE.COMPLAINT` | 300 rows. Header split from prose, line wrap undone, order reference corrected |
+| `LAB.COMPLAINT_REASON` | registered model, V1 and V2 — TF-IDF + logistic regression |
+| `LAB.COMPLAINT_PREDICTION` | 300 predictions with a max-class probability |
+| `LAB.COMPLAINT_VECTOR` | 300 × `VECTOR(FLOAT, 256)` from a feature-hashing UDF |
+| `LAB.COMPLAINT_KNN_PREDICTION` | nearest-neighbour classifier, no model artefact |
+| `LAB.TEXT_HASH_VECTOR` / `LAB.COMPLAINT_TONE` | Python UDFs — hashing vectoriser, tone lexicon |
+| `OPS.COMPLAINT_TRUTH` | answer key, internal stage, evaluation only |
+
+**The answer key is separated by construction, not by convention.** It lives in
+`OPS`, reached through a Snowflake internal stage rather than the Azure
+container holding the documents, and no statement in `p10_classify.sql` or
+`p10_vectors.sql` references it — `grep -v '^--' … | grep -c COMPLAINT_TRUTH`
+returns 0. It is regenerated rather than archived, and the loader diffs the
+regenerated dbt seeds against the committed ones before uploading, so a drifted
+generator stops the load instead of silently scoring the wrong documents.
+
+**Results, held out on 240:**
+
+| | A: TF-IDF + logistic regression | B: hashed vector + 1-NN |
+|---|---|---|
+| accuracy | 85.42% | 84.58% |
+| macro-F1 | 0.7489 | 0.7446 |
+| template seen in training | 203 / 203 | 202 / 203 |
+| template never seen | 2 / 37 | 1 / 37 |
+
+Majority baseline 29.58%. Memorisation floor 84.58%.
+
+**The headline number is not the finding.** Each reason code is generated from
+three sentence templates and the 60 labels cover them unevenly, so 203 of the
+240 held-out documents are phrased the way something in training was phrased.
+Nine of the ten classes got exactly those right — exactly, not approximately.
+On the 37 genuinely novel phrasings the model scores 5.41%, **below the 10% a
+uniform guess over ten classes would achieve**, because its errors are
+systematic: unseen phrasings route to whatever shares surface vocabulary.
+
+Two methods sharing nothing but the input text land 0.84 points apart with
+identical per-class recall on 7 of 10 classes. **The ceiling belongs to the
+corpus and the 60-label sample, not to either method.**
+
+**What is operationally usable is the confidence score, not the classifier.**
+All 35 errors fall in the lowest confidence fifth; a threshold at 0.235
+auto-routes 80% of complaints with zero errors. Agreement between the two
+models is the weaker signal — 92.7% on 90.8% coverage — because they fail
+identically, returning the same wrong label on all 16 shared errors.
+
+**Cross-validation overestimated macro-F1** (0.7777 against 0.7489) because its
+test rows are drawn from the same 60 documents, so every CV test row's template
+is in the label pool by construction and the failure mode is invisible to it.
+Accuracy matched to half a point; only the macro average exposed it.
+
+**Vectors here are lexical, not semantic.** `VECTOR(FLOAT, 256)` and
+`VECTOR_COSINE_SIMILARITY` are native; an embedding model is not. Signed feature
+hashing puts complaints close when they share words. The upgrade is staging
+`all-MiniLM-L6-v2` inside the UDF, and the distinction belongs in any write-up
+rather than in a footnote.
+
+**Sentiment is a lexicon and measures intensity, not polarity** — every
+complaint is negative by construction. The per-class table shows the limit:
+MISSING_ITEM scores 4.33 against LATE_DELIVERY's 2.41, which orders the word
+list rather than operational severity.
+
+**One source bug, corrected downstream.** `gen_complaints.py:38` claims its
+order ids resolve against `generate.py`. The ranges do not overlap at all —
+900,000–919,999 against 1–20,000 — so every complaint referenced a nonexistent
+order. `CORE.COMPLAINT` adds 899,999, a bijection onto the real id space.
+Fixing the generator would change every body interpolating an order id and
+force all 300 PDFs to be re-uploaded.
+
+**UNVERIFIED and confirmed working:** the Model Registry accepts a text
+pipeline with a one-column STRING `sample_input_data` and infers the signature.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
@@ -710,9 +788,9 @@ in `p9_features.sql` as a comment.
   Snowpark and `snowflake-ml-python` never had to run on the Mac. dbt takes the
   container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
 - **`SERVE`.** The application layer, Part 13. `LAB` is built — Part 9.
-- **Parts 10 through 15.** Text and classification without Cortex (10),
-  Streamlit in Snowflake (11), governance (12), `SERVE` (13), CI/CD (14), the
-  cost model closed out against measured credits (15).
+- **Parts 11 through 15.** Streamlit in Snowflake (11), governance (12),
+  `SERVE` (13), CI/CD (14), the cost model closed out against measured
+  credits (15). Part 10 is built.
 
 ---
 
