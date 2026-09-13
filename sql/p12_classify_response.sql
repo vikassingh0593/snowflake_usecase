@@ -88,24 +88,35 @@ ORDER  BY PRIVACY_CATEGORY NULLS LAST, COLUMN_NAME;
 -- return a USEFUL transformation of the value rather than a hole, and analysis
 -- survives the protection.
 -- =============================================================================
-CREATE OR REPLACE MASKING POLICY GOV.MASK_COORDINATE AS (v FLOAT)
-RETURNS FLOAT ->
+-- Created then altered, never replaced -- a policy attached to a column
+-- cannot be replaced at all, which is what this file hit on its second run:
+-- "Policy MASK_COORDINATE cannot be dropped/replaced as it is associated with
+-- one or more entities." The placeholder body is NULL rather than a
+-- pass-through, so the column is never attached to a policy that reveals it.
+CREATE MASKING POLICY IF NOT EXISTS GOV.MASK_COORDINATE AS (v FLOAT)
+RETURNS FLOAT -> NULL
+COMMENT = 'about a kilometre of precision. Neighbourhood, not doorstep';
+
+ALTER MASKING POLICY GOV.MASK_COORDINATE SET BODY ->
   CASE
     WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'QC_ADMIN', 'QC_ENGINEER') THEN v
     ELSE ROUND(v, 2)
-  END
-COMMENT = 'about a kilometre of precision. Neighbourhood, not doorstep';
+  END;
 
 -- A tag can carry one masking policy PER DATA TYPE, so GOV.PII could hold
 -- MASK_NAME for strings and MASK_COORDINATE for floats, and the columns would
--- need no policy of their own. That is the more elegant arrangement and it is
--- not the one used here, for a dull but decisive reason: ALTER TAG ... SET
--- MASKING POLICY fails when the policy is already bound and there is no FORCE
--- for it, so binding a second policy makes this file abort on its second run.
+-- need no policy of their own. That is the more elegant arrangement.
 --
--- Column attachment takes FORCE and is therefore re-runnable. The columns
--- still get the tag, so the inventory query below still finds them -- the tag
--- carries the classification, the policy carries the behaviour.
+-- An earlier version of this comment claimed the tag route was unusable
+-- because ALTER TAG ... SET MASKING POLICY has no FORCE. That appears to be
+-- wrong -- FORCE is documented for tags and p12_policies.sql now uses it, so
+-- if that file runs clean the tag route is available after all and this could
+-- be moved onto the tag.
+--
+-- It stays on the columns for now because column attachment with FORCE is
+-- already proven on this account rather than believed. The columns still carry
+-- the tag, so the inventory query below finds them either way: the tag carries
+-- the classification, the policy carries the behaviour.
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN HOME_LAT
   SET MASKING POLICY GOV.MASK_COORDINATE FORCE;
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN HOME_LON

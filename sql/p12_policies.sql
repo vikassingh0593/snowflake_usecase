@@ -64,25 +64,43 @@ SELECT 'QC_ANALYST', STORE_CODE FROM MART.DIM_STORE WHERE STORE_CODE <= 'DS003';
 -- same way -- while revealing nothing. Which of the two an analyst gets is a
 -- decision about their job, and it belongs in the policy.
 -- =============================================================================
-CREATE OR REPLACE MASKING POLICY GOV.MASK_EMAIL AS (v STRING)
-RETURNS STRING ->
+-- POLICIES ARE CREATED THEN ALTERED, NEVER REPLACED.
+--
+--   003531 (23001): Policy MASK_COORDINATE cannot be dropped/replaced as it
+--   is associated with one or more entities.
+--
+-- CREATE OR REPLACE is the idempotent form for most objects and the opposite
+-- for a policy: once attached to a column, a policy cannot be replaced at all.
+-- ALTER ... SET BODY modifies it in place, attached, which is the only form
+-- that works on the second run.
+--
+-- Each policy is therefore created with a FAIL-CLOSED body and then altered to
+-- its real one. The placeholder redacts rather than passes through, so there
+-- is no instant -- not even between two statements -- where the column is
+-- attached to a policy that reveals it.
+CREATE MASKING POLICY IF NOT EXISTS GOV.MASK_EMAIL AS (v STRING)
+RETURNS STRING -> '***REDACTED***'
+COMMENT = 'full for engineering, stable hash for analysts, redacted otherwise';
+
+ALTER MASKING POLICY GOV.MASK_EMAIL SET BODY ->
   CASE
     WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'QC_ADMIN', 'QC_ENGINEER') THEN v
     WHEN CURRENT_ROLE() = 'QC_ANALYST' THEN SHA2(LOWER(v), 256)
     ELSE '***REDACTED***'
-  END
-COMMENT = 'full for engineering, stable hash for analysts, redacted otherwise';
+  END;
 
-CREATE OR REPLACE MASKING POLICY GOV.MASK_PHONE AS (v STRING)
-RETURNS STRING ->
+CREATE MASKING POLICY IF NOT EXISTS GOV.MASK_PHONE AS (v STRING)
+RETURNS STRING -> '***REDACTED***'
+COMMENT = 'last four digits only. Enough to confirm a customer on a call';
+
+ALTER MASKING POLICY GOV.MASK_PHONE SET BODY ->
   CASE
     WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'QC_ADMIN', 'QC_ENGINEER') THEN v
     -- REPEAT and RIGHT rather than a regex. The obvious regex for this is
     -- '[0-9](?=[0-9]{4})' and Snowflake has no lookahead, so it does not
     -- compile. This is also clearer about what it keeps.
     ELSE REPEAT('X', GREATEST(LENGTH(v) - 4, 0)) || RIGHT(v, 4)
-  END
-COMMENT = 'last four digits only. Enough to confirm a customer on a call';
+  END;
 
 -- =============================================================================
 -- STEP 3 — the row access policy.
@@ -92,8 +110,11 @@ COMMENT = 'last four digits only. Enough to confirm a customer on a call';
 -- app reading that view, which is the property a filtered view cannot give:
 -- a view protects the path through it, a policy protects the data.
 -- =============================================================================
-CREATE OR REPLACE ROW ACCESS POLICY GOV.RAP_STORE AS (store_sk STRING)
-RETURNS BOOLEAN ->
+CREATE ROW ACCESS POLICY IF NOT EXISTS GOV.RAP_STORE AS (store_sk STRING)
+RETURNS BOOLEAN -> FALSE
+COMMENT = 'engineering sees everything, everyone else sees their entitled stores';
+
+ALTER ROW ACCESS POLICY GOV.RAP_STORE SET BODY ->
   CURRENT_ROLE() IN ('ACCOUNTADMIN', 'QC_ADMIN', 'QC_ENGINEER')
   OR EXISTS (
        SELECT 1
@@ -101,8 +122,7 @@ RETURNS BOOLEAN ->
        JOIN   MART.DIM_STORE s ON s.STORE_CODE = e.STORE_CODE
        WHERE  e.ROLE_NAME = CURRENT_ROLE()
          AND  s.STORE_SK  = store_sk
-     )
-COMMENT = 'engineering sees everything, everyone else sees their entitled stores';
+     );
 
 -- =============================================================================
 -- STEP 4 — the tag, and why tag-based masking is the one worth having.
@@ -112,22 +132,29 @@ COMMENT = 'engineering sees everything, everyone else sees their entitled stores
 -- protects it; no one has to remember to also attach a policy, and forgetting
 -- is the normal failure.
 -- =============================================================================
--- OR REPLACE resets the tag, which also clears every column assignment it
--- had. That is what makes the ALTER TAG ... SET MASKING POLICY below safe to
--- re-run, and it is also why re-running this file alone drops the LOCATION
--- tags that p12_classify_response.sql applies. Run the two in order.
-CREATE OR REPLACE TAG GOV.PII
+-- IF NOT EXISTS, for the same reason as the policies: a tag with a masking
+-- policy bound to it cannot be replaced. Allowed values are set once at
+-- creation and never change here.
+CREATE TAG IF NOT EXISTS GOV.PII
   ALLOWED_VALUES 'EMAIL', 'PHONE', 'NAME', 'LOCATION'
   COMMENT = 'what kind of personal data this column holds';
 
-CREATE OR REPLACE MASKING POLICY GOV.MASK_NAME AS (v STRING)
-RETURNS STRING ->
+CREATE MASKING POLICY IF NOT EXISTS GOV.MASK_NAME AS (v STRING)
+RETURNS STRING -> '***REDACTED***';
+
+ALTER MASKING POLICY GOV.MASK_NAME SET BODY ->
   CASE
     WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'QC_ADMIN', 'QC_ENGINEER') THEN v
     ELSE LEFT(v, 1) || REPEAT('*', GREATEST(LENGTH(v) - 1, 0))
   END;
 
-ALTER TAG GOV.PII SET MASKING POLICY GOV.MASK_NAME;
+-- FORCE here is UNVERIFIED on this account. A plain SET fails once the tag
+-- already carries a policy of this type, and FORCE is documented as the way to
+-- replace it -- an earlier comment in p12_classify_response.sql asserted no
+-- FORCE exists for tags, which I now believe was wrong and have corrected
+-- there. If this errors, the answer is that the claim was right after all and
+-- the binding is a one-time statement.
+ALTER TAG GOV.PII SET MASKING POLICY GOV.MASK_NAME FORCE;
 
 -- =============================================================================
 -- STEP 5 — attach.
