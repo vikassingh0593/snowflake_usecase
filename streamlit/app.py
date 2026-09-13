@@ -37,6 +37,32 @@ def q(sql: str):
     return session.sql(sql).to_pandas()
 
 
+def show_table(df):
+    """st.dataframe, across whatever Streamlit this runtime actually has.
+
+    Snowflake wraps st.dataframe in its own mixin -- a traceback here names
+    DataFrameSelectorMixin, not Streamlit's DataFrameMixin -- and that wrapper
+    does not accept hide_index or column_config even though the version string
+    says 1.52. So this feature-detects by calling and catching TypeError rather
+    than branching on st.__version__, which describes Streamlit and not what
+    the wrapper forwards. TypeError is raised before anything renders, so
+    falling back costs nothing and cannot double-draw.
+    """
+    try:
+        st.dataframe(df, use_container_width=True)
+    except TypeError:
+        st.dataframe(df)
+
+
+def toggle(label, value=False, help=None):
+    """st.toggle where it exists, st.checkbox where it does not."""
+    fn = getattr(st, "toggle", st.checkbox)
+    try:
+        return fn(label, value=value, help=help)
+    except TypeError:
+        return fn(label, value)
+
+
 def log_action(subject_type: str, subject_id: str, action: str,
                note: str, context: dict) -> None:
     """Append one row to SERVE.ACTION_LOG.
@@ -55,9 +81,12 @@ def log_action(subject_type: str, subject_id: str, action: str,
 
 
 st.title("Quick-commerce operations console")
+import sys
+
 st.caption(
     "Reads QCOMMERCE.SERVE only. 8 dark stores, 20,000 orders over 60 days, "
-    "300 complaints."
+    "300 complaints.  ·  streamlit %s, python %s"
+    % (st.__version__, sys.version.split()[0])
 )
 
 ops_tab, risk_tab, complaints_tab, health_tab = st.tabs(
@@ -114,25 +143,21 @@ with ops_tab:
         left, right = st.columns(2)
         with left:
             st.subheader("By store")
-            st.dataframe(
+            show_table(
                 q("SELECT STORE_CODE, CITY, SUM(ORDERS) AS ORDERS, "
                   "       ROUND(100.0*SUM(BREACHED)/NULLIF(SUM(ORDERS),0),2) AS BREACH_PCT, "
                   "       ROUND(SUM(DELIVERED_SEC)/NULLIF(SUM(DELIVERED_N),0)/60.0,1) AS AVG_ACTUAL_MIN "
                   "FROM SERVE.SLA_STORE_HOUR_AGG WHERE STORE_CODE IN (%s) "
-                  "GROUP BY STORE_CODE, CITY ORDER BY BREACH_PCT DESC" % safe),
-                width="stretch", hide_index=True,
-            )
+                  "GROUP BY STORE_CODE, CITY ORDER BY BREACH_PCT DESC" % safe))
         with right:
             st.subheader("Worst store-hours")
             st.caption("At least 20 orders, so a single late delivery cannot top the list.")
-            st.dataframe(
+            show_table(
                 q("SELECT STORE_CODE, IST_HOUR, SUM(ORDERS) AS ORDERS, "
                   "       ROUND(100.0*SUM(BREACHED)/NULLIF(SUM(ORDERS),0),2) AS BREACH_PCT "
                   "FROM SERVE.SLA_BY_STORE_HOUR WHERE STORE_CODE IN (%s) "
                   "GROUP BY STORE_CODE, IST_HOUR HAVING SUM(ORDERS) >= 20 "
-                  "ORDER BY BREACH_PCT DESC LIMIT 12" % safe),
-                width="stretch", hide_index=True,
-            )
+                  "ORDER BY BREACH_PCT DESC LIMIT 12" % safe))
 
 # ---------------------------------------------------------------------------
 # Risk queue
@@ -158,7 +183,7 @@ with risk_tab:
         "FROM SERVE.ORDER_RISK ORDER BY P_BREACH DESC LIMIT %d" % int(capacity)
     )
 
-    reveal = st.toggle(
+    reveal = toggle(
         "Reveal outcomes", value=False,
         help="Hidden by default so the queue reads the way a dispatcher would "
              "see it, with the score and nothing else.",
@@ -186,13 +211,7 @@ with risk_tab:
     else:
         shown = queue.drop(columns=["ACTUAL_BREACHED"])
 
-    st.dataframe(
-        shown, width="stretch", hide_index=True,
-        column_config={
-            "P_BREACH": st.column_config.ProgressColumn(
-                "Breach risk", min_value=0.0, max_value=1.0, format="%.3f"),
-        },
-    )
+    show_table(shown)
 
     st.subheader("Record a decision")
     st.caption(
@@ -252,14 +271,7 @@ with complaints_tab:
         "FROM SERVE.COMPLAINT_TRIAGE WHERE ROUTING = 'REVIEW' "
         "ORDER BY CONFIDENCE ASC"
     )
-    st.dataframe(
-        review, width="stretch", hide_index=True,
-        column_config={
-            "CONFIDENCE": st.column_config.ProgressColumn(
-                "Confidence", min_value=0.0, max_value=0.6, format="%.3f"),
-            "COMPLAINT_TEXT": st.column_config.TextColumn("Complaint", width="large"),
-        },
-    )
+    show_table(review)
 
     st.subheader("Where the auto-routed ones went")
     st.bar_chart(
@@ -309,17 +321,16 @@ with health_tab:
 
     st.caption("Failing checks sort first. A check that has never run does not "
                "appear here at all, which is its own kind of silence.")
-    st.dataframe(health, width="stretch", hide_index=True)
+    show_table(health)
 
     st.subheader("Models")
-    st.dataframe(q("SELECT * FROM SERVE.MODEL_SCOREBOARD ORDER BY MODEL_NAME, SPLIT"),
-                 width="stretch", hide_index=True)
+    show_table(q("SELECT * FROM SERVE.MODEL_SCOREBOARD ORDER BY MODEL_NAME, SPLIT"))
 
     st.subheader("Decisions recorded")
     actions = q("SELECT LOGGED_AT, ACTED_BY, SUBJECT_TYPE, SUBJECT_ID, ACTION, NOTE "
                 "FROM SERVE.ACTION_LOG ORDER BY LOGGED_AT DESC LIMIT 50")
     if len(actions):
-        st.dataframe(actions, width="stretch", hide_index=True)
+        show_table(actions)
     else:
         st.caption("Nothing logged yet. Use the forms on the other two tabs.")
 
@@ -330,7 +341,6 @@ with health_tab:
         "different environment from this one -- only the app can say what the "
         "app is running."
     )
-    import sys
     versions = q(
         "SELECT CURRENT_VERSION() AS SNOWFLAKE, CURRENT_WAREHOUSE() AS WAREHOUSE, "
         "       CURRENT_ROLE() AS ROLE, CURRENT_USER() AS USER_"
