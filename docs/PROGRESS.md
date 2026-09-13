@@ -416,6 +416,102 @@ greens in verification SQL rather than in the data.
 
 ---
 
+## Part 8 — MART, complete
+
+`dbt build --select tag:mart` — 9 models, 32 tests, **PASS=42 ERROR=0**.
+
+| Model | Rows | Pattern |
+|---|---|---|
+| `fct_inventory_daily` | 96,000 | periodic snapshot |
+| `fct_order_status_event` | 78,874 | transaction, immutable |
+| `fct_order_item` | 54,635 | transaction |
+| `fct_order` | 20,000 | **accumulating snapshot** |
+| `dim_date` | 213 | generated spine |
+| `dim_customer` / `dim_product` / `dim_rider` / `dim_store` | 500 / 220 / 60 / 8 | SCD1, SCD2, SCD1, SCD1 |
+
+**250,510 rows across nine tables.**
+
+### Three fact patterns, and why all three
+
+`fct_order` is an accumulating snapshot: one row per order, rewritten as it walks
+its lifecycle, milestones as columns. It answers *how long from packed to picked
+up*. It cannot represent a transition that never happened —
+`fct_order_status_event` keeps the immutable log beside it and answers *which
+transitions were skipped*, which is exactly what 348 orders are interesting for.
+
+`fct_inventory_daily` is a periodic snapshot: store × product × day whether or
+not anything moved. The absence of change is itself a measurement, and "stock
+sat at zero for six days" cannot be derived from a table that records only
+movements.
+
+### The model that pays for SCD2
+
+```sql
+left join dim_product p
+       on p.product_id = i.product_id
+      and o.placed_ts >= p.valid_from
+      and o.placed_ts <  p.valid_to
+```
+
+Twenty products changed price on 2026-09-11. Every order was placed on or before
+09-08, so every line joins the pre-rise price. Joining on `product_id` alone
+would restate historical revenue at today's price — the precise failure SCD2
+exists to prevent. It also exposes `price_variance_paise`, the gap between what
+the catalogue said and what was charged, which is invisible without a versioned
+dimension.
+
+### Two silent failures, and which test caught the second
+
+| Attempt | `valid_from` on version 1 | What happened |
+|---|---|---|
+| 1 | read from `CORE.PRODUCT` after the MERGE | version 1 recorded the NEW price. 200 rows, 0 closed — indistinguishable from a dimension that has not changed |
+| 2 | the snapshot's own `CDC_TS` | correct prices, wrong window. Every fact predates version 1, so `product_sk` was null on all 54,635 rows |
+| 3 | open lower bound, `1900-01-01` | correct |
+
+A snapshot says what the state **is**, not when it started being that. Those 200
+products existed for months before Debezium captured them, and stamping version 1
+with the capture time asserts that nothing existed beforehand.
+
+**Only `not_null` caught the second one.** The `relationships` test passed —
+relationship tests ignore nulls by design, so a foreign key that is null for
+every row satisfies it completely. A dimension join that silently returns nothing
+is how a fact table starts under-reporting with every referential check green.
+The not-null test on a foreign key is not redundant with the relationships test;
+it is the only one that sees this.
+
+### A schema grant is not an object grant
+
+Every model reading `CORE` failed with *"does not exist or not authorized"* —
+one message covering two unrelated situations. The tables existed; `SVC_CI` could
+not see them.
+
+`p1_bootstrap.sql` granted `ALL ON SCHEMA QCOMMERCE.CORE` to `QC_ENGINEER`. That
+is usage, create table, create view — privileges on the *schema*. A table created
+later by a different role carries none of them, and every `CORE` table was created
+by `ACCOUNTADMIN` running `snow sql`. The bootstrap did set `FUTURE TABLES` on
+`RAW`, which is why nothing hit this until `MART`.
+
+`ON ALL` and `ON FUTURE` are both required. Granting only `FUTURE` is the classic
+half-fix: it repairs tomorrow and leaves today broken.
+
+### dbt runs from a pinned image now
+
+`pip install dbt-snowflake` on every invocation cost about ninety seconds — fine
+for four seeds, unworkable once `MART` made dbt a write-run-read-fix loop.
+`dbt/Dockerfile` pins dbt-core 1.12.4 and dbt-snowflake 1.12.0, the versions the
+first unpinned run resolved. Startup is now about a second.
+
+An image rather than a native install for a reason beyond speed: Part 14 runs
+`dbt build` in a Linux container on GitHub Actions, so a pinned image makes local
+and CI the same dbt against the same adapter. A macOS install would diverge from
+CI on exactly the axis that matters.
+
+`macros/generate_schema_name.sql` overrides dbt's default concatenation so models
+land in `MART` rather than `RAW_MART`. The default exists so developers sharing a
+warehouse do not collide; here the layer names are the architecture.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in

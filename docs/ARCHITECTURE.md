@@ -566,6 +566,35 @@ table · `CORE.STR_ORDER_ENRICHED` on a view.
 A stream on a view requires `CHANGE_TRACKING` set explicitly on every underlying
 table; a stream on a table enables it implicitly.
 
+### MART as built — Part 8
+
+Built by dbt from a pinned image, `CORE` declared as a source rather than a model.
+`dbt build --select tag:mart` returns PASS=42 ERROR=0.
+
+| Model | Rows | Fact pattern |
+|---|---|---|
+| `fct_inventory_daily` | 96,000 | periodic snapshot |
+| `fct_order_status_event` | 78,874 | transaction, immutable |
+| `fct_order_item` | 54,635 | transaction, SCD2-resolved |
+| `fct_order` | 20,000 | accumulating snapshot |
+| `dim_date` | 213 | generated spine |
+| `dim_customer` / `dim_product` / `dim_rider` / `dim_store` | 500 / 220 / 60 / 8 | SCD1 / **SCD2** / SCD1 / SCD1 |
+
+`fct_order_item` joins `dim_product` on a validity range, so a line carries the
+price in force when the order was placed. All 20 price changes post-date every
+order, so every line resolves to the pre-rise version — and `price_variance_paise`
+exposes catalogue against charged, which no unversioned dimension can show.
+
+**A schema grant is not an object grant.** `GRANT ALL ON SCHEMA CORE` covers
+usage and create; it grants nothing on tables inside, and `CORE`'s tables were
+created by `ACCOUNTADMIN`. `sql/p8_grants.sql` issues `ON ALL` and `ON FUTURE`
+for `CORE`, `RAW` and `OPS` — neither implies the other.
+
+**dbt runs from `dbt/Dockerfile`**, pinned to dbt-core 1.12.4 and dbt-snowflake
+1.12.0, so local and the Part 14 CI run the same versions.
+`macros/generate_schema_name.sql` stops dbt concatenating `target.schema` with
+the custom name.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
@@ -586,7 +615,7 @@ table; a stream on a table enables it implicitly.
 - **A native arm64 interpreter.** Mechanisms 13 and 14 sidestepped it by running
   in containers, as mechanism 2 did. Part 9 cannot: Snowpark and
   `snowflake-ml-python` want to be on the Mac itself.
-- **Everything downstream of `CORE`.** `MART`, `SERVE` and `LAB` are empty.
+- **`SERVE` and `LAB`.** Risk scoring, forecasting, the application layer and governance.
 
 ---
 

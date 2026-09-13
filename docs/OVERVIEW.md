@@ -4,7 +4,7 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. Cleaning and conformance complete.**
+**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance and the dimensional model complete.**
 
 ---
 
@@ -150,7 +150,8 @@ Route 11 is refused by the account tier. See §10.
 | `CORE` | 270,497 | 12 tables, typed, deduplicated, versioned |
 | Queried in place | 2,800 | Partner files, never copied |
 | Read live from a publisher | 15,683 | Marketplace share, never stored |
-| `MART`, `SERVE`, `LAB` | **0** | Not started |
+| `MART` | 250,510 | 9 tables, dimensional model |
+| `SERVE`, `LAB` | **0** | Not started |
 
 `CORE` in detail:
 
@@ -241,7 +242,7 @@ rider assignment. The route is kept in the repository as design, not deleted.
 | Warehouse foundation | Complete |
 | **Ingestion** | **Complete — 13 of 14 routes** |
 | **Cleaning and conformance** (`CORE`) | **Complete** |
-| Dimensional model (`MART`) | Not started |
+| **Dimensional model** (`MART`) | **Complete** |
 | Risk scoring | Not started |
 | Forecasting and text analysis | Not started |
 | Application layer | Not started |
