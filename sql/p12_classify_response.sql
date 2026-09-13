@@ -48,25 +48,66 @@ CREATE TABLE IF NOT EXISTS GOV.CLASSIFICATION_RESULT (
   RAW               VARIANT
 ) COMMENT = 'what EXTRACT_SEMANTIC_CATEGORIES proposed, kept so it can be diffed';
 
-INSERT INTO GOV.CLASSIFICATION_RESULT
-  (OBJECT_NAME, COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY,
-   CONFIDENCE, COVERAGE, RAW)
+-- ONE-TIME CLEANUP. The first version appended ten rows on every execution,
+-- and five retries while debugging left five identical snapshots. They carry
+-- no information -- a history of when a script was re-run is not a history of
+-- when the data changed -- so all but the most recent go. Nothing is lost
+-- because they are identical, and after the guarded insert below there will
+-- never be two the same again.
+DELETE FROM GOV.CLASSIFICATION_RESULT
+WHERE  CLASSIFIED_AT < (SELECT MAX(CLASSIFIED_AT) FROM GOV.CLASSIFICATION_RESULT);
+
 -- No PARSE_JSON. On this account EXTRACT_SEMANTIC_CATEGORIES already returns
 -- an OBJECT, and wrapping it gives "Invalid argument types for function
 -- 'PARSE_JSON': (OBJECT)". The first version assumed a JSON string because the
 -- probe's output RENDERED as pretty-printed JSON, which is just how Snowflake
 -- displays a VARIANT. FLATTEN takes the object directly.
+--
+-- The insert is GUARDED: a snapshot is written only when the classification
+-- differs from the last one, or when there is no last one. The point of this
+-- table is to diff runs against each other, and a row per script execution
+-- buries the only signal that matters -- a column that starts being classified
+-- as an identifier is a column whose contents changed underneath somebody --
+-- under a pile of rows saying nothing happened.
+INSERT INTO GOV.CLASSIFICATION_RESULT
+  (OBJECT_NAME, COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY,
+   CONFIDENCE, COVERAGE, RAW)
 WITH raw AS (
     SELECT EXTRACT_SEMANTIC_CATEGORIES('QCOMMERCE.MART.DIM_CUSTOMER') AS j
+),
+this_run AS (
+    SELECT f.key                                            AS COLUMN_NAME,
+           f.value:recommendation:privacy_category::STRING  AS PRIVACY_CATEGORY,
+           f.value:recommendation:semantic_category::STRING AS SEMANTIC_CATEGORY,
+           f.value:recommendation:confidence::STRING        AS CONFIDENCE,
+           f.value:recommendation:coverage::FLOAT           AS COVERAGE,
+           f.value                                          AS RAW
+    FROM   raw, LATERAL FLATTEN(input => raw.j) f
+),
+previous AS (
+    SELECT COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY
+    FROM   GOV.CLASSIFICATION_RESULT
+    WHERE  CLASSIFIED_AT = (SELECT MAX(CLASSIFIED_AT) FROM GOV.CLASSIFICATION_RESULT)
+),
+-- Symmetric difference, so a column that GAINS a classification and one that
+-- LOSES one both count as a change. A one-sided MINUS would miss the second,
+-- and a column quietly ceasing to be classified is the more alarming of the two.
+changed AS (
+    SELECT COUNT(*) AS n FROM (
+        (SELECT COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY FROM this_run
+         MINUS
+         SELECT COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY FROM previous)
+        UNION ALL
+        (SELECT COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY FROM previous
+         MINUS
+         SELECT COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY FROM this_run)
+    )
 )
 SELECT 'QCOMMERCE.MART.DIM_CUSTOMER',
-       f.key,
-       f.value:recommendation:privacy_category::STRING,
-       f.value:recommendation:semantic_category::STRING,
-       f.value:recommendation:confidence::STRING,
-       f.value:recommendation:coverage::FLOAT,
-       f.value
-FROM   raw, LATERAL FLATTEN(input => raw.j) f;
+       COLUMN_NAME, PRIVACY_CATEGORY, SEMANTIC_CATEGORY, CONFIDENCE, COVERAGE, RAW
+FROM   this_run
+WHERE  (SELECT n FROM changed) > 0
+   OR  (SELECT COUNT(*) FROM previous) = 0;
 
 SELECT COLUMN_NAME,
        COALESCE(PRIVACY_CATEGORY, '— none proposed —')  AS privacy_category,
@@ -161,11 +202,17 @@ SELECT 'classifier_output_is_retained', 'GOV.CLASSIFICATION_RESULT',
        (SELECT COUNT(*) FROM GOV.CLASSIFICATION_RESULT
          WHERE CLASSIFIED_AT = (SELECT MAX(CLASSIFIED_AT) FROM GOV.CLASSIFICATION_RESULT)) = 10
        AND (SELECT COUNT(*) FROM GOV.CLASSIFICATION_RESULT
-             WHERE PRIVACY_CATEGORY IS NOT NULL) >= 4,
+             WHERE PRIVACY_CATEGORY IS NOT NULL
+               AND CLASSIFIED_AT = (SELECT MAX(CLASSIFIED_AT)
+                                    FROM GOV.CLASSIFICATION_RESULT)) >= 4,
        (SELECT COUNT(*) FROM GOV.CLASSIFICATION_RESULT
-         WHERE PRIVACY_CATEGORY IS NOT NULL),
-       'all 10 columns recorded and at least 4 carry a proposal, so the run '
-         || 'can be diffed against the next one',
+         WHERE PRIVACY_CATEGORY IS NOT NULL
+           AND CLASSIFIED_AT = (SELECT MAX(CLASSIFIED_AT)
+                                FROM GOV.CLASSIFICATION_RESULT)),
+       'all 10 columns in the latest snapshot, at least 4 carrying a proposal. '
+         || 'Scoped to that snapshot: the first version counted every row ever '
+         || 'written, so the observed number grew with each retry and described '
+         || 'the script rather than the data',
        (SELECT OBJECT_AGG(COLUMN_NAME, SEMANTIC_CATEGORY::VARIANT)
         FROM GOV.CLASSIFICATION_RESULT
         WHERE SEMANTIC_CATEGORY IS NOT NULL
