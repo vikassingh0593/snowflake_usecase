@@ -67,17 +67,31 @@ def log_action(subject_type: str, subject_id: str, action: str,
                note: str, context: dict) -> None:
     """Append one row to SERVE.ACTION_LOG.
 
-    Bound parameters rather than string formatting. The note is free text typed
-    by whoever is on shift, and building SQL out of it by concatenation is how
-    an apostrophe in "rider didn't call" becomes a syntax error on a good day
-    and something worse on a bad one.
+    Bound parameters first. The note is free text typed by whoever is on shift,
+    and building SQL out of it by concatenation is how an apostrophe in "rider
+    didn't call" becomes a syntax error on a good day.
+
+    The runtime here is older than its version string suggests -- it reports
+    streamlit 1.22, some thirty minor versions behind what the package channel
+    advertises -- so the bundled Snowpark may predate session.sql(params=...).
+    The fallback is not string formatting in the loose sense: every value is
+    escaped by doubling its single quotes, which is the SQL escape, and the
+    TypeError that triggers the fallback is raised while binding arguments,
+    before any statement reaches the warehouse. Nothing can be inserted twice.
     """
-    session.sql(
-        "INSERT INTO SERVE.ACTION_LOG "
-        "  (SUBJECT_TYPE, SUBJECT_ID, ACTION, NOTE, CONTEXT) "
-        "SELECT ?, ?, ?, ?, PARSE_JSON(?)",
-        params=[subject_type, subject_id, action, note, json.dumps(context)],
-    ).collect()
+    values = [subject_type, subject_id, action, note, json.dumps(context)]
+    stmt = ("INSERT INTO SERVE.ACTION_LOG "
+            "  (SUBJECT_TYPE, SUBJECT_ID, ACTION, NOTE, CONTEXT) "
+            "SELECT ?, ?, ?, ?, PARSE_JSON(?)")
+    try:
+        session.sql(stmt, params=values).collect()
+    except TypeError:
+        lit = ["'%s'" % str(v).replace("'", "''") for v in values]
+        session.sql(
+            "INSERT INTO SERVE.ACTION_LOG "
+            "  (SUBJECT_TYPE, SUBJECT_ID, ACTION, NOTE, CONTEXT) "
+            "SELECT %s, %s, %s, %s, PARSE_JSON(%s)" % tuple(lit)
+        ).collect()
 
 
 st.title("Quick-commerce operations console")
