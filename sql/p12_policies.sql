@@ -131,8 +131,14 @@ ALTER TAG GOV.PII SET MASKING POLICY GOV.MASK_NAME;
 -- FULL_NAME gets no policy of its own. It gets the tag, and the policy arrives
 -- with it. That is the whole demonstration.
 -- =============================================================================
-ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN EMAIL SET MASKING POLICY GOV.MASK_EMAIL;
-ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN PHONE SET MASKING POLICY GOV.MASK_PHONE;
+-- FORCE, on both. Without it, SET MASKING POLICY fails when a policy is
+-- already attached, so this file would run exactly once and then start
+-- aborting -- and a governance script that cannot be re-run is a governance
+-- script nobody re-runs.
+ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN EMAIL
+  SET MASKING POLICY GOV.MASK_EMAIL FORCE;
+ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN PHONE
+  SET MASKING POLICY GOV.MASK_PHONE FORCE;
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN FULL_NAME SET TAG GOV.PII = 'NAME';
 
 ALTER TABLE MART.FCT_ORDER ADD ROW ACCESS POLICY GOV.RAP_STORE ON (STORE_SK);
