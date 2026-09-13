@@ -32,10 +32,16 @@ USE DATABASE QCOMMERCE;
 -- =============================================================================
 SHOW TABLES LIKE 'FCT_ORDER' IN SCHEMA MART;
 
+-- cluster_by, not clustering_key. SHOW TABLES and the ACCOUNT_USAGE views
+-- name the same property differently, and I took the name from the wrong one.
 SELECT "name", "rows", "bytes",
        ROUND("bytes" / 1024.0 / 1024.0, 2) AS mb,
-       "clustering_key",
-       "search_optimization"
+       "cluster_by",
+       "search_optimization",
+       -- Snowflake micro-partitions hold roughly 16 MB compressed. A table
+       -- smaller than one of them has nothing to prune, which decides this
+       -- whole file before a single structure is built.
+       CEIL("bytes" / 1024.0 / 1024.0 / 16.0) AS partitions_at_most
 FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 
 SELECT SYSTEM$CLUSTERING_INFORMATION('MART.FCT_ORDER', '(ORDER_ID)')
@@ -184,7 +190,7 @@ DROP MATERIALIZED VIEW IF EXISTS LAB.MV_ORDERS_BY_STORE;
 
 SHOW MATERIALIZED VIEWS IN SCHEMA LAB;
 SHOW TABLES LIKE 'FCT_ORDER' IN SCHEMA MART;
-SELECT "name", "search_optimization", "clustering_key"
+SELECT "name", "search_optimization", "cluster_by"
 FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
