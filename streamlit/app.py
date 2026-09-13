@@ -299,8 +299,13 @@ with health_tab:
 
     a, b = st.columns(2)
     a.metric("Checks", len(health))
-    b.metric("Failing", failing, delta=None if failing == 0 else "needs attention",
-             delta_color="inverse")
+    # delta_color is passed only alongside a delta. Streamlit validates the two
+    # together and this tab is the one that has to render when everything else
+    # is broken -- it is where you look to find out what broke.
+    if failing:
+        b.metric("Failing", failing, delta="needs attention", delta_color="inverse")
+    else:
+        b.metric("Failing", 0)
 
     st.caption("Failing checks sort first. A check that has never run does not "
                "appear here at all, which is its own kind of silence.")
