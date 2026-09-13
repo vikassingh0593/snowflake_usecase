@@ -112,6 +112,10 @@ COMMENT = 'engineering sees everything, everyone else sees their entitled stores
 -- protects it; no one has to remember to also attach a policy, and forgetting
 -- is the normal failure.
 -- =============================================================================
+-- OR REPLACE resets the tag, which also clears every column assignment it
+-- had. That is what makes the ALTER TAG ... SET MASKING POLICY below safe to
+-- re-run, and it is also why re-running this file alone drops the LOCATION
+-- tags that p12_classify_response.sql applies. Run the two in order.
 CREATE OR REPLACE TAG GOV.PII
   ALLOWED_VALUES 'EMAIL', 'PHONE', 'NAME', 'LOCATION'
   COMMENT = 'what kind of personal data this column holds';
@@ -141,6 +145,10 @@ ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN PHONE
   SET MASKING POLICY GOV.MASK_PHONE FORCE;
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN FULL_NAME SET TAG GOV.PII = 'NAME';
 
+-- DROP ALL first. There is no FORCE for row access policies and ADD fails when
+-- one is already attached, but DROP ALL tolerates there being none -- which
+-- makes the pair idempotent where neither statement is on its own.
+ALTER TABLE MART.FCT_ORDER DROP ALL ROW ACCESS POLICIES;
 ALTER TABLE MART.FCT_ORDER ADD ROW ACCESS POLICY GOV.RAP_STORE ON (STORE_SK);
 
 -- =============================================================================
