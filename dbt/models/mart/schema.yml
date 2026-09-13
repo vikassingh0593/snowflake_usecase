@@ -1,0 +1,105 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: Generated date spine. Every day exists whether or not anything happened on it.
+    columns:
+      - name: date_sk
+        tests: [unique, not_null]
+
+  - name: dim_store
+    description: SCD1. A dark store does not move.
+    columns:
+      - name: store_sk
+        tests: [unique, not_null]
+      - name: store_id
+        tests: [unique, not_null]
+
+  - name: dim_customer
+    description: SCD1 for now. History exists in the CDC log, not yet versioned here.
+    columns:
+      - name: customer_sk
+        tests: [unique, not_null]
+
+  - name: dim_rider
+    columns:
+      - name: rider_sk
+        tests: [unique, not_null]
+
+  - name: dim_product
+    description: SCD2. One row per product per version; the surrogate key includes valid_from.
+    columns:
+      - name: product_sk
+        tests: [unique, not_null]
+      - name: product_id
+        tests: [not_null]
+    tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "valid_from < valid_to"
+
+  - name: fct_order
+    description: Accumulating snapshot, one row per order, rewritten as it walks its lifecycle.
+    columns:
+      - name: order_sk
+        tests: [unique, not_null]
+      - name: customer_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_sk
+      - name: store_sk
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_store')
+                field: store_sk
+      - name: lifecycle_outcome
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["CLEAN", "CANCELLED", "OUT_OF_ORDER", "SKIPPED_TRANSITION", "INCOMPLETE", "NO_EVENTS"]
+    tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "gross_paise - discount_paise + delivery_fee_paise = order_total_paise"
+
+  - name: fct_order_item
+    description: Transaction grain. product_sk resolved as at the order date, not as at now.
+    columns:
+      - name: order_item_sk
+        tests: [unique, not_null]
+      - name: order_sk
+        tests:
+          - relationships:
+              arguments:
+                to: ref('fct_order')
+                field: order_sk
+      - name: product_sk
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_product')
+                field: product_sk
+
+  - name: fct_order_status_event
+    description: Transaction grain, immutable. The log the accumulating snapshot cannot represent.
+    columns:
+      - name: event_sk
+        tests: [unique, not_null]
+      - name: to_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["PLACED", "PACKED", "PICKED_UP", "DELIVERED", "CANCELLED"]
+
+  - name: fct_inventory_daily
+    description: Periodic snapshot. Store x product x day, whether or not anything moved.
+    columns:
+      - name: inventory_sk
+        tests: [unique, not_null]
+      - name: on_hand_qty
+        tests: [not_null]

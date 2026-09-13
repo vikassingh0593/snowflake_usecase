@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: core
+    database: QCOMMERCE
+    schema: CORE
+    description: >
+      Conformed, deduplicated entities. Built by sql/p7_core_*.sql rather than by
+      dbt, so they are sources here and not models -- dbt did not create them and
+      must not claim to own them.
+    tables:
+      - name: order_header
+      - name: order_item
+      - name: order_status_event
+      - name: inventory_daily
+      - name: customer
+      - name: product
+      - name: rider
+      - name: store
+      - name: dim_product
+        description: SCD2 product history, 200 current plus 20 closed versions
+      - name: order_funnel
+        description: orders with a complete PLACED-PACKED-PICKED_UP-DELIVERED sequence
+      - name: order_cancelled
+      - name: order_lifecycle_anomaly

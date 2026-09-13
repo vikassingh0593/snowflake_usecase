@@ -21,7 +21,15 @@ seeds:
     +tags: ["seed", "mechanism_14"]
 
 models:
-  qcommerce: {}
+  qcommerce:
+    mart:
+      # MART literally, not RAW_MART. macros/generate_schema_name.sql overrides
+      # dbt's default concatenation -- that default exists so developers sharing
+      # a warehouse do not collide, which is not the situation here. The layer
+      # names are the architecture.
+      +schema: MART
+      +materialized: table
+      +tags: ["mart"]
 
 on-run-start:
   - "ALTER SESSION SET QUERY_TAG = 'p06:dbt_seeds'"
