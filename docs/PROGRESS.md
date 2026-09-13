@@ -1041,6 +1041,179 @@ bookmark-safe. `PACKAGES` listed 1.52.2 so it looked like the runtime.
 
 ---
 
+## Part 12 — governance (in progress)
+
+Eleven concerns in the §12 design. Seven are built and measured, two are
+written and not yet run, two are not started. Files: `p12_probe.sql`,
+`p12_policies.sql`, `p12_classify_response.sql`, `p12_quality_lineage.sql`,
+`p12_serverless.sql`.
+
+### What this account has
+
+Fourteen attempts, each isolated in its own try/except inside one procedure so
+that learning about the fourteenth did not depend on the first succeeding.
+**Twelve of fourteen available.** Masking policies, row access policies,
+tag-based masking, data metric functions and their schedules, materialized
+views, alerts, email notification integrations, and all three metadata views —
+`ACCESS_HISTORY` with 11,286 rows, `OBJECT_DEPENDENCIES` with 266,
+`QUERY_ATTRIBUTION_HISTORY` with 663.
+
+The only gap was classification, and the error decided how to read it:
+
+```
+002139 (02000): SQL compilation error: Unknown function SYSTEM$CLASSIFY
+```
+
+**Unknown function, not insufficient privileges** — an API that moved rather
+than a tier gate. `EXTRACT_SEMANTIC_CATEGORIES` is where it went, and it works.
+
+Search optimization estimated at **0.000323 credits** to build, which made the
+estimate-build-measure-drop cycle affordable rather than theoretical.
+
+### Protection, verified by looking
+
+| | `ACCOUNTADMIN` | `QC_ANALYST` |
+|---|---|---|
+| `EMAIL` | `ananya.1@example.com` | `7210be29a621dc56…` (SHA2) |
+| `PHONE` | `+919895660819` | `XXXXXXXXX0819` |
+| `FULL_NAME` | `Ananya Reddy` | `A***********` |
+| `HOME_LAT` | `28.547024` | `28.55` |
+| `FCT_ORDER` | 20,000 orders, 8 stores | 8,444 orders, 3 stores |
+| `SERVE.ORDER_RISK` | 4,777 rows | 1,977 rows, 3 stores |
+
+**`FULL_NAME` has no policy of its own.** It carries the tag `GOV.PII = 'NAME'`
+and `MASK_NAME` is bound to the tag. That is the mechanism worth having: tag a
+column that does not exist yet and it is protected the moment it does.
+
+**The row access policy propagates untold.** `SERVE.ORDER_RISK` was written in
+Part 11 knowing nothing about a policy that did not exist, and the Streamlit
+app reading it inherits the restriction with no change to either. A view
+protects the path through it; a policy protects the data.
+
+Verification is by `USE ROLE QC_ANALYST` and a `SELECT`, never by reading what
+`SHOW` says is attached — the Part 8 lesson, where `GRANT ALL ON SCHEMA` turned
+out not to be an object grant and only a query under the role caught it.
+
+### The classifier was more useful than the policies
+
+`EXTRACT_SEMANTIC_CATEGORIES` disagreed with the hand tagging in **both**
+directions:
+
+| column | classifier | I had |
+|---|---|---|
+| EMAIL | IDENTIFIER / EMAIL, HIGH | masked |
+| FULL_NAME | IDENTIFIER / NAME, HIGH | tagged |
+| **HOME_LAT / HOME_LON** | **QUASI_IDENTIFIER, HIGH** | **nothing** |
+| **PHONE** | **no recommendation** | masked |
+
+It found the home coordinates, which were sitting in the clear. There is one
+household at six decimal places — they re-identify a customer more sharply than
+a phone number does — and they were unprotected because **I tagged the columns
+that look like PII rather than the columns that behave like it.**
+
+It missed the phone entirely. The values are `+919895660819`; the pattern
+library evidently keys on North American formats. **An automated classifier's
+silence is evidence about the classifier's training, not about the data.**
+
+Classification proposes. It is a very good way to find what you forgot and a
+very bad way to decide you are finished.
+
+The coordinates are protected by **rounding to two decimals** — about a
+kilometre, so neighbourhood but not doorstep — rather than redaction, which
+would break the distance feature the SLA model depends on. That is the argument
+for masking policies over redaction: a policy can return a *useful*
+transformation, and the analysis survives the protection.
+
+### What each part of this project cost
+
+Every script in this repo sets `QUERY_TAG`, which was cheap discipline at the
+time and is the entire reason this table exists.
+
+| part | credits | share |
+|---|---|---|
+| p09 — ML | 0.1335 | 34.7% |
+| p06 — ingestion 10–14 | 0.0659 | 17.1% |
+| p10 — text | 0.0583 | 15.2% |
+| (untagged) | 0.0532 | 13.9% |
+| p07 — CORE | 0.0172 | 4.5% |
+| p03 / p04 / p05 / p08 | < 0.005 each | ~2% |
+| **total attributed** | **0.3844** | 2026-08-27 → 2026-09-13 |
+
+**This is not the bill.** `QUERY_ATTRIBUTION_HISTORY` attributes *query*
+compute and excludes idle warehouse time, Snowpipe, Snowpipe Streaming,
+dynamic-table refresh and cloud services. The 3.78 credits carried since Part 3
+came from warehouse metering, which includes idle. The two measure different
+things and neither replaces the other — but this one answers *which part* spent
+it, which metering never could.
+
+### Lineage, three ways
+
+`ACCESS_HISTORY` records which **columns** a query touched. `QUERY_HISTORY`
+records that a query happened and its text — so answering "who read the email
+column" means string-matching SQL, which cannot tell a read from a mention in a
+comment and misses every read through `SERVE.V_CUSTOMER` where the word never
+appears. `OBJECT_DEPENDENCIES` is the static graph and needed nothing to have
+run: it found all five `CORE` streams and views, `SERVE.ORDER_RISK` reaching
+four objects across `MART` and `LAB`, and the dynamic table's two sources.
+
+Only the first answers the question a masking policy raises. The lag is
+measured and printed rather than assumed, so an empty result is not mistaken
+for an absence.
+
+### The trap that was nearly left armed
+
+The data metric function attached fine and the schedule set fine. The catalogue
+then said:
+
+```
+NULL_COUNT | 0 */1 * * * UTC |
+SUSPENDED_INSUFFICIENT_PRIVILEGE_TO_EXECUTE_DATA_METRIC_FUNCTION
+```
+
+Two problems in one row. The reference still carried an **hourly cron after
+`UNSET DATA_METRIC_SCHEDULE`**, and the only thing preventing it from running
+was a privilege this role does not hold. Whoever grants `EXECUTE DATA METRIC
+FUNCTION ON ACCOUNT` later, for an unrelated reason, would start an hourly job
+on a table nobody asked to monitor — and the connection between the grant and
+the spend is invisible from both ends. The metric is detached outright; the
+direct call already proved it works and cost one query.
+
+`p12_probe.sql` had reported *data metric schedule: YES* because the `ALTER`
+succeeded. **Setting the attribute and being permitted to execute the metric
+are different privileges, and the probe tested the statement rather than the
+outcome.**
+
+### Failures in this part, and they share one shape
+
+| | |
+|---|---|
+| `$$` inside a `$$`-quoted procedure | Dollar quotes do not nest; the DMF body would have ended the procedure mid-statement. The comment then added to explain that used the characters themselves and would have done the same thing — the parser has no idea it is reading a Python comment |
+| `(?=[0-9]{4})` in a masking policy | Snowflake's regex engine has no lookahead |
+| `PARSE_JSON` on the classifier output | It returns an OBJECT. I inferred a string because the probe's output *rendered* as pretty-printed JSON |
+| `REF_ENTITY_NAME` on `TAG_REFERENCES_ALL_COLUMNS` | Those are `POLICY_REFERENCES`' column names. Adjacent function, different shape |
+| `CREATE OR REPLACE` on a policy | **Cannot replace a policy attached to anything.** The idempotent form everywhere else is the opposite here. Every policy in both files had it, so both would have aborted on their second run |
+| `OBJECT_AGG(k, ARRAY_AGG(x))` | Two nested aggregates |
+| `ROW_COUNT(SELECT * FROM t)` | Its signature is `TABLE()` with zero columns. It is built to be attached, not called with a projection. `COUNT(*)` was always the answer |
+| "there is no FORCE for tags" | Written into a comment as justification for a design choice. There is; it works. Corrected in place rather than left standing |
+| An unscoped check and an unguarded insert | The check counted every row ever written, so its observed number grew with each retry and described the script rather than the data. Five debug retries left five identical snapshots |
+
+Nine of these are one error: **assuming an API's shape from how something
+rendered, or from what a neighbouring feature does.** This project's probe
+discipline is applied rigorously to *capabilities* — can this account do X —
+and was not being applied to *signatures*. The probe pattern needs extending:
+attempt the exact call, not the family it belongs to.
+
+### Not yet done in this part
+
+- `p12_serverless.sql` is written and unrun — search optimization and the
+  materialized view, estimated, built, measured and dropped in one file. The
+  recorded prediction is that `FCT_ORDER` is a single micro-partition, so
+  neither can help and both would cost.
+- **Alerting.** The alert and the email notification integration both probed
+  available. Needs a seeded `OPS.DQ_RESULTS` failure to fire on.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -1113,8 +1286,18 @@ rather than by `SHOW`.
 | `LAB` | complete — Parts 9 and 10, three registered model versions across two models |
 | `SERVE` | complete — Part 11, seven objects including the first dynamic table |
 | `APP` | complete — Part 11, `QC_CONSOLE` deployed and its write-back verified |
+| `GOV` | Part 12 — 3 masking policies, 1 row access policy, a PII tag, entitlements, classification history |
 
-**Next is Part 12 — governance.** This is where the project does its most
+**Part 12 is seven of eleven.** Two files remain: `p12_serverless.sql` is
+written and unrun, and alerting on a seeded `OPS.DQ_RESULTS` failure is not
+started. Both pieces of the alert — the alert object and the email notification
+integration — probed available.
+
+**Then Part 13 — outbound serving.** Reader account, private listing, SQL API.
+`SERVE` is built and now governed, which is what makes sharing it a reasonable
+thing to do rather than a reckless one.
+
+**Superseded, for reference — what Part 12 set out to settle:** This is where the project does its most
 interesting work, and unusually for this account the capability is confirmed
 present rather than gated: §1 Finding 2 established Enterprise-shaped
 governance by `CREATE MASKING POLICY` succeeding, not by reading an edition
@@ -1147,6 +1330,11 @@ Carry three lessons forward.
   runtime executes 1.22.0. The same shape produced the `DEFAULT_PACKAGES`
   error and the wrong claim about `CREATE OR REPLACE` preserving `url_id` —
   reading a value and assuming what it implies, instead of testing it.
+- From Part 12: **probe the exact call, not the family it belongs to.** Ten
+  signature errors in one part, nine of them the same mistake — inferring an
+  API's shape from how output rendered or from what an adjacent feature does.
+  The capability probes in this project work; the discipline was never being
+  applied to signatures.
 
 ### Row counts as they stand
 
@@ -1232,6 +1420,11 @@ Part 13 extends `SERVE` outward — reader account, private listing, SQL API.
 | `sql/p11_fix_object_type.sql` | One-time: drops the dynamic table squatting on the view's name |
 | `streamlit/app.py` | The console. Feature-detects its own Streamlit rather than trusting a version string |
 | `scripts/p11_deploy.sh` | PUT ships a code change; CREATE only when absent. `RECREATE=1` forces a replace |
+| `sql/p12_probe.sql` | Fourteen isolated capability attempts. Nothing left behind |
+| `sql/p12_policies.sql` | `GOV` schema, masking, row access, tag-based masking, the secure-view substitute |
+| `sql/p12_classify_response.sql` | Acts on what the classifier found and on what it missed |
+| `sql/p12_quality_lineage.sql` | One rule three ways, lineage three ways, credits per part |
+| `sql/p12_serverless.sql` | Search optimization and the materialized view. Estimate, build, measure, drop |
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |

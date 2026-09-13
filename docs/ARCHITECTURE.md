@@ -838,6 +838,76 @@ from the stage when opened. `CREATE STREAMLIT` is only needed the first time or
 when an object property changes — `CREATE OR REPLACE` issues a new `url_id` and
 breaks every bookmark.
 
+### Governance as built — Part 12 (in progress)
+
+Seven of eleven concerns built and measured, two written and unrun, two not
+started.
+
+**Capability, by attempting it.** Fourteen isolated attempts in one procedure;
+twelve available. Masking policies, row access policies, tag-based masking,
+data metric functions and schedules, materialized views, alerts, email
+notification integrations, and all three metadata views — `ACCESS_HISTORY`
+11,286 rows, `OBJECT_DEPENDENCIES` 266, `QUERY_ATTRIBUTION_HISTORY` 663. The
+only gap was `SYSTEM$CLASSIFY`, and the error said *Unknown function* rather
+than a privilege refusal, so it is an API that moved:
+`EXTRACT_SEMANTIC_CATEGORIES` is where it went and it works.
+
+| Concern | Built | Finding |
+|---|---|---|
+| Column protection | policy on `MART.DIM_CUSTOMER` + secure view `SERVE.V_CUSTOMER` | the policy travels every path; the view protects one |
+| Row protection | `GOV.RAP_STORE` on `FCT_ORDER.STORE_SK` | inherited by `SERVE.ORDER_RISK` and the app, untold |
+| Tag-driven | `GOV.PII` with `MASK_NAME` bound to the tag | `FULL_NAME` is masked with no policy of its own |
+| PII discovery | `EXTRACT_SEMANTIC_CATEGORIES` → `GOV.CLASSIFICATION_RESULT` | **changed the design** — see below |
+| Data quality | DMF, dbt test and SQL check on one rule | the DMF is the only one that runs when nobody runs anything |
+| Lineage | `ACCESS_HISTORY` vs `QUERY_HISTORY` vs `OBJECT_DEPENDENCIES` | only the first knows which columns were read |
+| Cost attribution | `QUERY_ATTRIBUTION_HISTORY` by `QUERY_TAG` | 0.3844 attributed credits, p09 at 34.7% |
+| Search optimization / MV | written, unrun | prediction recorded: one micro-partition, so neither helps |
+| Alerting | not started | both pieces probed available |
+
+**Verified by role, not by grant.** `QC_ANALYST` sees `A***********`, a SHA2
+hash, `XXXXXXXXX0819`, `28.55` for a coordinate stored as `28.547024`, and
+8,444 of 20,000 orders across 3 of 8 stores — 1,977 rows of `SERVE.ORDER_RISK`
+where `ACCOUNTADMIN` sees 4,777. Part 8 established that reading a grant proves
+nothing; the same applies to reading what `SHOW` says is attached.
+
+**The classifier disagreed in both directions and was right both times.** It
+found `HOME_LAT` and `HOME_LON` as QUASI_IDENTIFIER at HIGH confidence, sitting
+unprotected — there is one household at six decimal places, so coordinates
+re-identify more sharply than a phone number, and they were in the clear
+because the hand tagging covered the columns that *look* like PII rather than
+the ones that *behave* like it. It missed `PHONE` entirely, because the values
+are `+919895660819` and the pattern library keys on North American formats.
+**Classification proposes; its silence is evidence about its training.**
+
+The coordinates are protected by rounding to two decimals rather than
+redaction, which would break the distance feature the SLA model depends on.
+That is the case for masking policies over redaction: the policy returns a
+useful transformation and the analysis survives the protection.
+
+**An armed trap, found and defused.** A data metric function attached and
+scheduled cleanly, then the catalogue reported an hourly cron still present
+after `UNSET DATA_METRIC_SCHEDULE`, suspended only by a missing `EXECUTE DATA
+METRIC FUNCTION` privilege. Granting that privilege later for an unrelated
+reason would have started an hourly job on a table nobody asked to monitor. The
+metric is detached outright. The probe had reported the schedule as available
+because the `ALTER` succeeded — **it tested the statement, not the outcome.**
+
+**Policies are created then altered, never replaced.** `CREATE OR REPLACE` is
+the idempotent form for most objects and is rejected outright for a policy
+attached to anything. Every policy is created with a fail-closed body and
+altered into place, so no column is ever attached to a policy that reveals it,
+not even between two statements. `SET MASKING POLICY` needs `FORCE`, `ADD ROW
+ACCESS POLICY` needs a preceding `DROP ALL`, and `CREATE OR REPLACE TAG`
+silently clears every column assignment. **A governance script that runs once
+and then aborts is one nobody re-runs**, which is how protection quietly stops
+matching intent.
+
+**Ten signature errors in this part**, listed in `PROGRESS.md`. Nine reduce to
+one mistake: inferring an API's shape from how output *rendered*, or from what
+an adjacent feature does. This project probes *capabilities* rigorously — can
+this account do X — and was not probing *signatures*. The discipline needs
+extending to the exact call rather than the family it belongs to.
+
 ### Not yet done
 
 - **Account budget** - still the only control covering serverless spend, and
@@ -847,7 +917,11 @@ breaks every bookmark.
   a registered model have now run without it. Snowsight -> Admin -> Cost
   Management -> Budgets, 80 credits.
 - **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
-  catches up (~3 h). 3.78 credits predates Parts 3-5 entirely.
+  catches up (~3 h). 3.78 credits predates Parts 3-5 entirely. Part 12's
+  `QUERY_ATTRIBUTION_HISTORY` report now answers *which part spent it* —
+  0.3844 attributed credits, p09 at 34.7% — but attributed query compute
+  excludes idle warehouse time and all serverless, so it is a floor and not
+  the bill. The two measure different things.
 - **Mechanism 11 only, and not by choice.** External access is refused on a
   trial account (§1 Finding 3). 13 of 14 is the ceiling here.
 - **The Anaconda gate does not exist on this account.** It was assumed to block
@@ -863,9 +937,11 @@ breaks every bookmark.
   container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
 - **Outbound serving.** Reader account, private listing and the SQL API are
   Part 13. `SERVE` itself is built — Part 11.
-- **Parts 12 through 15.** Governance (12), outbound serving — reader account,
-  private listing, SQL API (13), CI/CD (14), the cost model closed out against
-  measured credits (15). Parts 10 and 11 are built.
+- **Part 12, finishing.** `p12_serverless.sql` is written and unrun; alerting
+  on a seeded `OPS.DQ_RESULTS` failure is not started.
+- **Parts 13 through 15.** Outbound serving — reader account, private listing,
+  SQL API (13), CI/CD (14), the cost model closed out against measured
+  credits (15). Parts 10 and 11 are built; 12 is seven of eleven.
 
 ---
 

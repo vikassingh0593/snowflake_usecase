@@ -332,8 +332,51 @@ Two service accounts, both typed as service accounts and both **key-pair
 authentication only**. No password exists in any file or configuration. Private
 keys are excluded from version control.
 
-Planned governance builds each control two ways — attached to the data (column
-and row policies) and approximated through restricted views — and compares them.
+Each control is built **twice** and compared: once attached to the data itself,
+and once approximated with a restricted view. The difference is not academic. A
+policy attached to a column applies down every path to that column, including
+paths written before the policy existed. A restricted view protects the one
+path through it, and anyone who queries around it is unaffected.
+
+That was demonstrated rather than argued. The order-risk view the application
+reads was built before any row-level rule existed, and when the rule was
+attached to the underlying order table the application's view narrowed with it
+— 4,777 rows to 1,977, eight stores to three — with no change to either.
+
+| Seen by an analyst | Stored |
+|---|---|
+| `A***********` | full name |
+| a 64-character hash | email address |
+| `XXXXXXXXX0819` | full phone number |
+| `28.55` | `28.547024` |
+
+Hashing rather than blanking is deliberate: the same customer hashes the same
+way every time, so an analyst can still count and group by customer without
+ever seeing one. Coordinates are rounded to about a kilometre rather than
+removed, because removing them would break the delivery-distance calculation
+the risk model depends on — protection that destroys the analysis has not
+solved the problem, it has moved it.
+
+### Automated classification found something the hand tagging missed
+
+The platform's built-in classifier was run over the customer table. It
+disagreed with the manual tagging in both directions.
+
+It flagged **home coordinates** as re-identifying, at high confidence, and they
+had no protection at all. At six decimal places there is exactly one household
+at a coordinate pair — sharper than a phone number — and they had been
+overlooked because the manual pass covered the fields that look like personal
+data rather than the fields that behave like it. They are now protected.
+
+It **missed the phone number entirely**. The numbers are Indian and the
+classifier's pattern library evidently expects North American formats.
+
+Both halves matter. Automated classification is an excellent way to find what
+was forgotten and a poor way to conclude the job is done, and its silence says
+more about what it was trained on than about the data in front of it. Its
+output is kept and compared run to run, so a column that *starts* being
+classified as identifying — because what is stored in it changed — raises an
+alarm rather than passing unnoticed.
 
 ---
 
@@ -403,8 +446,8 @@ training procedure.
 | **Risk scoring** | **Complete** |
 | **Text classification** | **Complete** |
 | **Application layer** | **Complete** |
+| **Governance** | **Substantially complete** — 7 of 11 controls built and verified |
 | Forecasting | Not started |
-| Governance | Not started |
 | Outbound sharing | Not started |
 
 ---
