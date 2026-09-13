@@ -108,15 +108,16 @@ ALTER MASKING POLICY GOV.MASK_COORDINATE SET BODY ->
 -- need no policy of their own. That is the more elegant arrangement.
 --
 -- An earlier version of this comment claimed the tag route was unusable
--- because ALTER TAG ... SET MASKING POLICY has no FORCE. That appears to be
--- wrong -- FORCE is documented for tags and p12_policies.sql now uses it, so
--- if that file runs clean the tag route is available after all and this could
--- be moved onto the tag.
+-- because ALTER TAG ... SET MASKING POLICY has no FORCE. That was wrong.
+-- p12_policies.sql uses FORCE on the tag binding and it runs clean, so the
+-- tag route is available and MASK_COORDINATE could be bound to GOV.PII
+-- instead of to the columns.
 --
--- It stays on the columns for now because column attachment with FORCE is
--- already proven on this account rather than believed. The columns still carry
--- the tag, so the inventory query below finds them either way: the tag carries
--- the classification, the policy carries the behaviour.
+-- It stays on the columns, and the reason is worth stating plainly: both work,
+-- this one is verified on this account, and a change would buy elegance only.
+-- The columns still carry the tag, so the inventory query below finds them
+-- either way -- the tag carries the classification, the policy carries the
+-- behaviour.
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN HOME_LAT
   SET MASKING POLICY GOV.MASK_COORDINATE FORCE;
 ALTER TABLE MART.DIM_CUSTOMER MODIFY COLUMN HOME_LON
@@ -193,7 +194,10 @@ SELECT 'every_proposed_identifier_is_protected', 'MART.DIM_CUSTOMER',
        'no column the classifier flagged as an identifier is left unprotected. '
          || 'A future run proposing a new one turns this red, which is the '
          || 'intended alarm rather than a failure',
-       (SELECT OBJECT_AGG('unprotected', ARRAY_AGG(COLUMN_NAME)::VARIANT)
+       -- OBJECT_CONSTRUCT, not OBJECT_AGG. OBJECT_AGG is itself an aggregate
+       -- and ARRAY_AGG inside it is a second one, which Snowflake rejects.
+       -- A single-key object needs no aggregation over keys in any case.
+       (SELECT OBJECT_CONSTRUCT('unprotected', ARRAY_AGG(COLUMN_NAME))
         FROM proposed WHERE COLUMN_NAME NOT IN (SELECT COLUMN_NAME FROM protected));
 
 SELECT CHECK_NAME, PASSED, OBSERVED, EXPECTED, DETAIL
