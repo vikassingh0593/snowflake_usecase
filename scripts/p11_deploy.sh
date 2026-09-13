@@ -3,8 +3,19 @@
 # Deploy the Streamlit app.
 #
 # Two steps: PUT app.py onto the internal stage the probe created, then point a
-# STREAMLIT object at it. Re-running is how you ship a change -- CREATE OR
-# REPLACE STREAMLIT keeps the same url_id, so a bookmarked link survives.
+# STREAMLIT object at it.
+#
+# The PUT is what ships a code change. The app resolves its source from the
+# stage when it is opened, so a new app.py is live on the next page load with
+# no DDL at all. The CREATE is only needed the first time, or when a property
+# of the object itself changes -- the warehouse, the title, the main file.
+#
+# Hence IF NOT EXISTS rather than OR REPLACE. An earlier version of this script
+# used OR REPLACE and claimed it preserved url_id; that was never checked and
+# is very likely wrong, since replacing an object creates a new one. A changing
+# url_id breaks every bookmark to the app, which is a poor trade for a
+# statement that was not needed. RECREATE=1 forces it when a property really
+# has to change.
 #
 # No environment.yml. CREATE STREAMLIT supplies python 3.11,
 # snowflake-snowpark-python and streamlit 1.52 by default, which is everything
@@ -18,12 +29,14 @@
 # statement bought nothing even if it had worked. Extra packages go in an
 # environment.yml beside app.py, which this app does not need.
 #
-#   scripts/p11_deploy.sh           show what would run
-#   DEPLOY=1 scripts/p11_deploy.sh  run it, then print the app URL
+#   scripts/p11_deploy.sh                        show what would run
+#   DEPLOY=1 scripts/p11_deploy.sh               upload, create if absent
+#   DEPLOY=1 RECREATE=1 scripts/p11_deploy.sh    replace the object too
 #
 set -euo pipefail
 
 DEPLOY="${DEPLOY:-0}"
+RECREATE="${RECREATE:-0}"
 CONN="${SNOW_CONN:-qcpoc}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/streamlit/app.py"
@@ -45,8 +58,11 @@ echo "   compiles"
 
 PUT_STMT="PUT file://$APP @QCOMMERCE.APP.STG_APP/console AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
 
-read -r -d '' STATEMENTS <<'SQL' || true
-CREATE OR REPLACE STREAMLIT QCOMMERCE.APP.QC_CONSOLE
+CREATE_VERB="CREATE STREAMLIT IF NOT EXISTS"
+[ "$RECREATE" = "1" ] && CREATE_VERB="CREATE OR REPLACE STREAMLIT"
+
+read -r -d '' STATEMENTS <<SQL || true
+$CREATE_VERB QCOMMERCE.APP.QC_CONSOLE
   ROOT_LOCATION = '@QCOMMERCE.APP.STG_APP/console'
   MAIN_FILE = '/app.py'
   QUERY_WAREHOUSE = WH_APP_XS
@@ -64,6 +80,12 @@ if [ "$DEPLOY" != "1" ]; then
     echo
     echo "$STATEMENTS"
     echo "== WH_APP_XS runs only while the app is open. Idle costs nothing."
+    if [ "$RECREATE" = "1" ]; then
+        echo "== RECREATE=1: the object is replaced and its url_id changes."
+    else
+        echo "== The PUT alone ships a code change. CREATE only fires if the"
+        echo "== app does not exist yet, so url_id and bookmarks survive."
+    fi
     echo "== Rerun with: DEPLOY=1 scripts/p11_deploy.sh"
     exit 0
 fi
@@ -81,5 +103,5 @@ $STATEMENTS"
 
 echo
 echo "== open it from Snowsight: Projects -> Streamlit -> Quick-commerce"
-echo "   operations console. The url_id in the SHOW output above is the"
-echo "   stable part of the link and survives a redeploy."
+echo "   operations console. The url_id above is stable as long as the object"
+echo "   is not replaced -- a plain code change only needs the PUT."
