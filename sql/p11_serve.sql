@@ -15,6 +15,23 @@
 -- idle dynamic table costs anything to poll is UNVERIFIED, somewhere between
 -- nothing and a few credits a month. If it shows up in the credit backfill,
 -- ALTER DYNAMIC TABLE ... SUSPEND parks it without dropping it.
+--
+-- The first version of this file put the whole aggregate in one dynamic table,
+-- ratios included, and Snowflake answered:
+--
+--   FULL refresh mode was selected because: This dynamic table contains a
+--   complex query.
+--
+-- ROUND(100.0 * AVG(...)) and AVG(DATEDIFF(...)) are not incrementally
+-- maintainable -- an average cannot be updated from a delta without its
+-- denominator -- so every refresh re-aggregated all 19,377 rows. The split
+-- below is the fix and the lesson: A DYNAMIC TABLE HOLDS ADDITIVE AGGREGATES,
+-- AND DERIVED RATIOS LIVE IN A VIEW ABOVE IT. Sums and counts compose from
+-- deltas; averages and percentages do not.
+--
+-- The app reads SERVE.SLA_BY_STORE_HOUR either way. That the storage under it
+-- could be restructured without touching the app is the argument for having a
+-- SERVE layer, demonstrated rather than asserted.
 -- =============================================================================
 USE ROLE ACCOUNTADMIN;
 USE WAREHOUSE WH_TRANSFORM_XS;
@@ -30,10 +47,11 @@ USE DATABASE QCOMMERCE;
 -- place: the source is a dbt table that changes on a schedule, which is
 -- exactly the shape dynamic tables are for.
 -- =============================================================================
-CREATE OR REPLACE DYNAMIC TABLE SERVE.SLA_BY_STORE_HOUR
-  TARGET_LAG = '60 minutes'
-  WAREHOUSE  = WH_TRANSFORM_XS
-  COMMENT    = 'store x local hour SLA. One of two dynamic tables this project allows'
+CREATE OR REPLACE DYNAMIC TABLE SERVE.SLA_STORE_HOUR_AGG
+  TARGET_LAG   = '60 minutes'
+  WAREHOUSE    = WH_TRANSFORM_XS
+  REFRESH_MODE = INCREMENTAL
+  COMMENT      = 'additive aggregates only. Ratios are in the view above this'
 AS
 SELECT s.STORE_CODE,
        s.CITY,
@@ -41,16 +59,37 @@ SELECT s.STORE_CODE,
        -- Stored UTC, operated in IST. An operations screen showing UTC hours
        -- would put the evening peak at half past one in the afternoon.
        HOUR(DATEADD('minute', 330, o.PLACED_TS))                    AS IST_HOUR,
+       -- Every column below is a COUNT or a SUM. Nothing here divides.
        COUNT(*)                                                     AS ORDERS,
        SUM(IFF(o.IS_BREACHED, 1, 0))                                AS BREACHED,
-       ROUND(100.0 * AVG(IFF(o.IS_BREACHED, 1.0, 0.0)), 2)          AS BREACH_PCT,
-       ROUND(AVG(DATEDIFF('second', o.PLACED_TS, o.PROMISED_TS)) / 60.0, 1)   AS AVG_PROMISED_MIN,
-       ROUND(AVG(DATEDIFF('second', o.PLACED_TS, o.DELIVERED_TS)) / 60.0, 1)  AS AVG_ACTUAL_MIN,
+       SUM(DATEDIFF('second', o.PLACED_TS, o.PROMISED_TS))          AS PROMISED_SEC,
+       SUM(DATEDIFF('second', o.PLACED_TS, o.DELIVERED_TS))         AS DELIVERED_SEC,
+       COUNT(o.DELIVERED_TS)                                        AS DELIVERED_N,
        SUM(o.ORDER_TOTAL_PAISE)                                     AS GROSS_PAISE
 FROM   MART.FCT_ORDER o
 JOIN   MART.DIM_STORE s ON s.STORE_SK = o.STORE_SK
 WHERE  o.STATUS = 'DELIVERED'
 GROUP  BY s.STORE_CODE, s.CITY, PLACED_DATE, IST_HOUR;
+
+-- The name the app knows. Division happens here, where it costs nothing to
+-- maintain, over a table that stays incrementally refreshable.
+--
+-- DELIVERED_N rather than ORDERS as the denominator for AVG_ACTUAL_MIN: a
+-- delivered order always has a timestamp, so today the two are equal, and
+-- dividing by the wrong one would only start lying later. NULLIF guards the
+-- empty group that a filtered refresh could produce.
+CREATE OR REPLACE VIEW SERVE.SLA_BY_STORE_HOUR AS
+SELECT STORE_CODE,
+       CITY,
+       PLACED_DATE,
+       IST_HOUR,
+       ORDERS,
+       BREACHED,
+       ROUND(100.0 * BREACHED / NULLIF(ORDERS, 0), 2)               AS BREACH_PCT,
+       ROUND(PROMISED_SEC  / NULLIF(ORDERS, 0) / 60.0, 1)           AS AVG_PROMISED_MIN,
+       ROUND(DELIVERED_SEC / NULLIF(DELIVERED_N, 0) / 60.0, 1)      AS AVG_ACTUAL_MIN,
+       GROSS_PAISE
+FROM   SERVE.SLA_STORE_HOUR_AGG;
 
 -- =============================================================================
 -- STEP 2 — the risk queue.
@@ -176,6 +215,7 @@ UNION ALL SELECT 'ORDER_RISK',        COUNT(*) FROM SERVE.ORDER_RISK
 UNION ALL SELECT 'COMPLAINT_TRIAGE',  COUNT(*) FROM SERVE.COMPLAINT_TRIAGE
 UNION ALL SELECT 'DATA_HEALTH',       COUNT(*) FROM SERVE.DATA_HEALTH
 UNION ALL SELECT 'MODEL_SCOREBOARD',  COUNT(*) FROM SERVE.MODEL_SCOREBOARD
+UNION ALL SELECT 'SLA_STORE_HOUR_AGG', COUNT(*) FROM SERVE.SLA_STORE_HOUR_AGG
 UNION ALL SELECT 'ACTION_LOG',        COUNT(*) FROM SERVE.ACTION_LOG
 ORDER BY object;
 
@@ -240,27 +280,48 @@ SELECT 'risk_deciles_are_ordered_by_outcome', 'SERVE.ORDER_RISK',
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
 SELECT 'sla_aggregate_matches_the_fact_table', 'SERVE.SLA_BY_STORE_HOUR',
-       (SELECT SUM(ORDERS) FROM SERVE.SLA_BY_STORE_HOUR)
+       (SELECT SUM(ORDERS) FROM SERVE.SLA_STORE_HOUR_AGG)
          = (SELECT COUNT(*) FROM MART.FCT_ORDER WHERE STATUS = 'DELIVERED')
-       AND (SELECT SUM(BREACHED) FROM SERVE.SLA_BY_STORE_HOUR)
+       AND (SELECT SUM(BREACHED) FROM SERVE.SLA_STORE_HOUR_AGG)
          = (SELECT COUNT(*) FROM MART.FCT_ORDER WHERE IS_BREACHED),
-       (SELECT SUM(ORDERS) FROM SERVE.SLA_BY_STORE_HOUR),
+       (SELECT SUM(ORDERS) FROM SERVE.SLA_STORE_HOUR_AGG),
        'the dynamic table adds up to the fact table it aggregates',
        OBJECT_CONSTRUCT(
          'delivered', (SELECT COUNT(*) FROM MART.FCT_ORDER WHERE STATUS = 'DELIVERED'),
          'breached',  (SELECT COUNT(*) FROM MART.FCT_ORDER WHERE IS_BREACHED));
 
+-- Does the restructuring actually buy incremental refresh, or does Snowflake
+-- still call it complex. REFRESH_MODE = INCREMENTAL is stated explicitly on
+-- the CREATE, so an unmaintainable query fails there rather than downgrading
+-- quietly -- but configured_refresh_mode and refresh_mode are separate columns
+-- and it is the second one that governs.
+SHOW DYNAMIC TABLES LIKE 'SLA_STORE_HOUR_AGG' IN SCHEMA SERVE;
+
+INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
+SELECT 'dynamic_table_refreshes_incrementally', 'SERVE.SLA_STORE_HOUR_AGG',
+       UPPER("refresh_mode") = 'INCREMENTAL',
+       "rows",
+       'additive aggregates only, so deltas can be applied instead of '
+         || 're-aggregating 19,377 rows every hour',
+       OBJECT_CONSTRUCT('refresh_mode',            "refresh_mode",
+                        'configured_refresh_mode', "configured_refresh_mode",
+                        'target_lag',              "target_lag",
+                        'scheduling_state',        "scheduling_state",
+                        'reason',                  "refresh_mode_reason")
+FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SELECT CHECK_NAME, PASSED, OBSERVED, EXPECTED, DETAIL
 FROM   OPS.DQ_RESULTS
 WHERE  TARGET LIKE 'SERVE.%'
 ORDER  BY CHECK_TS DESC
-LIMIT  4;
+LIMIT  5;
 
 -- =============================================================================
 -- TEARDOWN
 -- =============================================================================
--- ALTER DYNAMIC TABLE QCOMMERCE.SERVE.SLA_BY_STORE_HOUR SUSPEND;
--- DROP DYNAMIC TABLE IF EXISTS QCOMMERCE.SERVE.SLA_BY_STORE_HOUR;
+-- ALTER DYNAMIC TABLE QCOMMERCE.SERVE.SLA_STORE_HOUR_AGG SUSPEND;
+-- DROP DYNAMIC TABLE IF EXISTS QCOMMERCE.SERVE.SLA_STORE_HOUR_AGG;
+-- DROP VIEW  IF EXISTS QCOMMERCE.SERVE.SLA_BY_STORE_HOUR;
 -- DROP VIEW  IF EXISTS QCOMMERCE.SERVE.ORDER_RISK;
 -- DROP VIEW  IF EXISTS QCOMMERCE.SERVE.COMPLAINT_TRIAGE;
 -- DROP VIEW  IF EXISTS QCOMMERCE.SERVE.DATA_HEALTH;
