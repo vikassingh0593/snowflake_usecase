@@ -11,6 +11,13 @@
 # app.py imports. A declared dependency that buys nothing is a dependency that
 # can break a deploy.
 #
+# This script briefly carried an ALTER STREAMLIT ... SET DEFAULT_PACKAGES,
+# which Snowflake rejected: invalid property 'DEFAULT_PACKAGES' for 'STREAMLIT'.
+# That name appears in DESCRIBE STREAMLIT output and I took it for a settable
+# property. It is read-only, it reports what the platform supplies, and the
+# statement bought nothing even if it had worked. Extra packages go in an
+# environment.yml beside app.py, which this app does not need.
+#
 #   scripts/p11_deploy.sh           show what would run
 #   DEPLOY=1 scripts/p11_deploy.sh  run it, then print the app URL
 #
@@ -45,9 +52,6 @@ CREATE OR REPLACE STREAMLIT QCOMMERCE.APP.QC_CONSOLE
   QUERY_WAREHOUSE = WH_APP_XS
   TITLE = 'Quick-commerce operations console'
   COMMENT = 'Part 11. Reads SERVE only, writes SERVE.ACTION_LOG';
-
-ALTER STREAMLIT QCOMMERCE.APP.QC_CONSOLE SET
-  DEFAULT_PACKAGES = 'python==3.11.*,snowflake-snowpark-python,streamlit';
 
 SHOW STREAMLITS IN SCHEMA QCOMMERCE.APP;
 SQL
