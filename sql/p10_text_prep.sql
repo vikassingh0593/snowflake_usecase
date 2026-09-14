@@ -198,15 +198,30 @@ SELECT 'prose_is_separated_from_header', 'CORE.COMPLAINT',
 
 -- A classifier that can read its own answer out of the input is not a
 -- classifier. The reason codes are upper-snake strings; none should appear.
+--
+-- LIKE, NOT ILIKE, and the difference is the whole check. The first version
+-- matched case-insensitively and scored 10 failures -- because PACKAGING is an
+-- ordinary English word, and ten complaints say "packaging" in plain prose.
+-- Only two of those are PACKAGING tickets. The check was not testing label
+-- leakage at all, it was testing whether English contains a word.
+--
+-- It had been failing since Part 10 and nobody saw it, because the summary
+-- below is LIMIT 6 and it sorted out of view. The Part 12 alert drill is what
+-- surfaced it, which is the most useful thing that drill did.
+--
+-- The real leak would be the LITERAL code -- LATE_DELIVERY with the underscore,
+-- in upper case -- appearing in prose. Case-sensitive matching tests that and
+-- nothing else.
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
 SELECT 'label_does_not_appear_in_the_text', 'CORE.COMPLAINT',
        (SELECT COUNT(*) FROM CORE.COMPLAINT c
-         JOIN RAW.COMPLAINT_REASON_CODE r ON c.COMPLAINT_TEXT ILIKE '%' || r.REASON_CODE || '%') = 0
+         JOIN RAW.COMPLAINT_REASON_CODE r ON c.COMPLAINT_TEXT LIKE '%' || r.REASON_CODE || '%') = 0
        AND (SELECT COUNT(*) FROM RAW.COMPLAINT_REASON_CODE) = 10,
        (SELECT COUNT(*) FROM CORE.COMPLAINT c
-         JOIN RAW.COMPLAINT_REASON_CODE r ON c.COMPLAINT_TEXT ILIKE '%' || r.REASON_CODE || '%'),
-       'no complaint contains its own reason code as a string, and there are '
-         || '10 codes to check against',
+         JOIN RAW.COMPLAINT_REASON_CODE r ON c.COMPLAINT_TEXT LIKE '%' || r.REASON_CODE || '%'),
+       'no complaint contains a reason code as a literal upper-case string, '
+         || 'and there are 10 codes to check against. Case-sensitive on '
+         || 'purpose: PACKAGING is also a word',
        NULL;
 
 -- The offset in STEP 2 either fixes the order reference or it does not, and a

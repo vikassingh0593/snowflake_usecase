@@ -122,6 +122,18 @@ SELECT * FROM OPS.ALERT_LOG ORDER BY FIRED_AT DESC LIMIT 5;
 -- the seed and here -- which is exactly what happened on the first attempt.
 DELETE FROM OPS.DQ_RESULTS WHERE CHECK_NAME = 'zzz_drill_seeded_failure';
 
+-- RENAMING A CHECK ORPHANS ITS LAST RESULT, and the drill above is what
+-- exposed it. vectors_are_not_all_the_same was renamed to
+-- vectors_separate_the_documents in Part 10 after it failed on a false
+-- assumption. The rename means the OLD name's final row -- a failure -- is
+-- permanently the latest result for a check that no longer runs, so any
+-- "is anything failing" query answers yes forever.
+--
+-- An append-only check log needs this cleanup whenever a check is renamed.
+-- The alternative is a retired-checks list to filter against, which is more
+-- machinery for the same outcome and one more thing to forget to update.
+DELETE FROM OPS.DQ_RESULTS WHERE CHECK_NAME = 'vectors_are_not_all_the_same';
+
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
 SELECT 'alert_fires_on_a_seeded_failure', 'OPS.ALERT_DQ_FAILED',
        (SELECT COUNT(*) FROM OPS.ALERT_LOG
@@ -135,15 +147,22 @@ SELECT 'alert_fires_on_a_seeded_failure', 'OPS.ALERT_DQ_FAILED',
                    WHERE CHECK_NAME = 'zzz_drill_seeded_failure')));
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
+-- QUALIFY is evaluated AFTER aggregation, so it cannot reference a raw column
+-- in a query that does COUNT(*): "[DQ_RESULTS.PASSED] is not a valid group by
+-- expression". The latest-row filter has to happen in a subquery and the count
+-- outside it. This is the same mistake as the NTILE one in Part 10, written a
+-- second time in a different clause.
 SELECT 'no_check_is_currently_failing', 'OPS.DQ_RESULTS',
-       (SELECT COUNT(*) FROM OPS.DQ_RESULTS
-         QUALIFY ROW_NUMBER() OVER (PARTITION BY CHECK_NAME, TARGET
-                                    ORDER BY CHECK_TS DESC) = 1
-            AND NOT PASSED) = 0,
-       (SELECT COUNT(*) FROM OPS.DQ_RESULTS
-         QUALIFY ROW_NUMBER() OVER (PARTITION BY CHECK_NAME, TARGET
-                                    ORDER BY CHECK_TS DESC) = 1
-            AND NOT PASSED),
+       (SELECT COUNT(*) FROM (
+          SELECT PASSED FROM OPS.DQ_RESULTS
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY CHECK_NAME, TARGET
+                                     ORDER BY CHECK_TS DESC) = 1
+        ) WHERE NOT PASSED) = 0,
+       (SELECT COUNT(*) FROM (
+          SELECT PASSED FROM OPS.DQ_RESULTS
+          QUALIFY ROW_NUMBER() OVER (PARTITION BY CHECK_NAME, TARGET
+                                     ORDER BY CHECK_TS DESC) = 1
+        ) WHERE NOT PASSED),
        'the latest result of every check passes, drill removed. This is the '
          || 'condition the alert watches, evaluated the same way it does',
        NULL;
