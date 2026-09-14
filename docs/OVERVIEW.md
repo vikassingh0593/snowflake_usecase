@@ -4,7 +4,85 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: ingestion complete at 13 of 14 routes. Cleaning, conformance, the dimensional model, predictive scoring, text classification and the application layer complete.**
+**Status: twelve of fifteen stages complete.** Ingestion (13 of 14 routes),
+cleaning, the business model, predictive scoring, text classification, the
+application layer and governance are all built and verified. Outbound sharing,
+CI/CD and the closing cost report remain.
+
+---
+
+## 0. In plain terms
+
+A company runs eight small local warehouses — "dark stores" — that hold grocery
+stock. You order on an app, and the company promises to deliver in 10 to 25
+minutes. Sometimes it does not. About one order in six arrives late.
+
+This platform is where all of that ends up so somebody can do something about
+it. Three things happen to the data, in order:
+
+1. **It arrives.** Orders, deliveries, stock levels and written complaints
+   stream in from the systems that produce them, and are stored exactly as they
+   came — nothing corrected, nothing thrown away.
+2. **It is cleaned and agreed.** Duplicates removed, dates made consistent,
+   prices as they were *at the time* rather than as they are now. One version
+   everybody uses.
+3. **It is put to work.** Two models read it — one predicts which orders are
+   about to be late, one reads complaint letters and files them by reason — and
+   a small application puts both in front of the people who act on them.
+
+The last step is the one that matters most, and it is easy to miss: **what those
+people decide is written back down.** A dispatcher who reassigns a rider, or a
+support agent who corrects a misfiled complaint, is creating the training data
+for the next version of the model. The platform is a loop, not a pipeline.
+
+```mermaid
+flowchart TD
+    subgraph W["The real world"]
+        A["Someone orders groceries<br/>20,000 orders over 60 days"]
+        B["A rider delivers it<br/>late about 16% of the time"]
+        C["Someone writes a complaint<br/>300 letters, as PDFs"]
+    end
+
+    subgraph L["1 · Arrives, untouched"]
+        D["<b>RAW</b><br/>~548,000 rows<br/>13 different ways in"]
+    end
+
+    subgraph K["2 · Cleaned and agreed"]
+        E["<b>CORE</b><br/>duplicates removed<br/>price history preserved"]
+    end
+
+    subgraph M["3 · In business language"]
+        F["<b>MART</b><br/>9 tables · 42 tests<br/>orders, stores, riders, products"]
+    end
+
+    subgraph U["4 · Put to work"]
+        G["<b>Late-delivery model</b><br/>ranks orders by risk"]
+        H["<b>Complaint classifier</b><br/>files letters by reason"]
+    end
+
+    subgraph S["5 · Published and protected"]
+        I["<b>SERVE</b><br/>personal data masked<br/>rows filtered by role"]
+    end
+
+    J(["<b>Operations console</b><br/>4 screens, inside the platform"])
+
+    A --> D
+    B --> D
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    F --> H
+    G --> I
+    H --> I
+    I --> J
+    J -. "what people decide<br/>becomes data too" .-> D
+```
+
+**Nothing leaves.** The models are trained inside the platform, the application
+runs inside it, and the data is never copied out to be processed somewhere else.
+Personal details are protected where they are stored rather than in each place
+they are read, so a query written next year is covered by a rule written today.
 
 ---
 

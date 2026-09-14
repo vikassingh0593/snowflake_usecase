@@ -9,6 +9,98 @@ purpose — if a step needs more than a few hundred MB, the design is wrong.
 
 ---
 
+## 0. The system in one pass
+
+An operator runs 8 dark stores. 20,000 orders over 60 days, each carrying a
+`promised_ts` 10 to 25 minutes after placement; 16.4% of them miss it. Every
+object in this document exists to find those orders before the customer does,
+and to make the resulting analysis both trustworthy and cheap to run.
+
+**Status on 2026-09-14: twelve of fifteen stages built and verified.** Ingestion
+(13 of 14 routes), conformance, the dimensional model, two models, the
+application layer and governance are done. Outbound sharing, CI/CD and the
+closing cost report are not.
+
+One database, `QCOMMERCE`. Nine schemas, and the schema an object lives in *is*
+the statement of who may read it — that is the whole access design, not a naming
+convention on top of one.
+
+```mermaid
+flowchart TB
+    subgraph SRC["Source systems"]
+        S1["OLTP<br/>Postgres 16 + CDC (Debezium)"]
+        S2["Event bus<br/>Kafka API (Redpanda)"]
+        S3["Object store<br/>Azure Blob · GPv2 · HNS off"]
+        S4["Seeds, complaint PDFs,<br/>marketplace share"]
+    end
+
+    LN["<b>LAND</b> — no tables<br/>stages · pipes · file formats<br/>external volume · network rules"]
+    RW["<b>RAW</b> — append-only, never updated<br/>21 tables · ~548,000 rows<br/>VARIANT payload + file metadata"]
+    CR["<b>CORE</b> — conformed<br/>13 tables · 270,797 rows<br/>deduped · typed · SCD2 history"]
+    MT["<b>MART</b> — published<br/>9 tables · 250,510 rows<br/>star schema · 42 tests"]
+    LB["<b>LAB</b> — transient sandbox<br/>features · training sets · scores<br/>3 registered model versions"]
+    SV["<b>SERVE</b> — the contract<br/>7 objects · 12,749 rows<br/>1 dynamic table @ 60 min lag"]
+    AP(["<b>APP.QC_CONSOLE</b><br/>Streamlit in Snowflake · 4 tabs"])
+
+    GV["<b>GOV</b><br/>masking + row access policies<br/>tags · semantic classification"]
+    OP["<b>OPS</b><br/>PIPELINE_LOG · DQ_RESULTS<br/>model metrics · alerts · credit snapshots"]
+
+    S1 --> LN
+    S2 --> LN
+    S3 --> LN
+    S4 --> LN
+    LN -- "13 routes" --> RW
+    RW -- "dbt" --> CR
+    CR -- "dbt" --> MT
+    MT -- "Snowpark" --> LB
+    MT -- "dbt" --> SV
+    LB -- "dbt promotion, tested" --> SV
+    SV --> AP
+    AP -. "ACTION_LOG write-back" .-> SV
+
+    GV -. "attached here" .- MT
+    GV -. "inherited, untold" .- SV
+    OP -.- RW
+    OP -.- MT
+    OP -.- LB
+    OP -.- SV
+```
+
+Left to right is the data path. `GOV` and `OPS` are not stages in it — they
+attach sideways to every layer, which is the point of both.
+
+| Edge | Mechanism | The constraint that makes it that way |
+|---|---|---|
+| sources → `LAND` → `RAW` | 13 ingestion routes (§5) | `RAW` is append-only and carries `METADATA$FILENAME` / `LOAD_TS`, so a bad load is reversible without a reload. **Dedupe in `CORE`, never `RAW`** |
+| `RAW` → `CORE` → `MART` | dbt | anything expressible in SQL belongs to dbt. `CORE` is the only reader of `RAW` |
+| `MART` → `LAB` | Snowpark | needs sklearn or row-wise Python state. `LAB` is `TRANSIENT` — no Fail-safe, cheaper, and disposable on purpose |
+| `LAB` → `SERVE` | a dbt model that re-tests | a **promotion**, not a reference. Nothing downstream may name a `LAB` object |
+| `SERVE` → app | Streamlit reads `SERVE` and nothing else | one surface to attach policies to, instead of nine |
+| app → `SERVE` | `SERVE.ACTION_LOG` | operator decisions become data. A later dbt model joins decisions to outcomes, so the app's own history is a feature |
+| `GOV` → `MART` | masking and row access policies on base tables | a policy attached at the base travels every path above it. `SERVE.ORDER_RISK` and the app inherit `RAP_STORE` without being told |
+| `OPS` ← everything | append-only logs | `OPS` is written by every layer and read by the operator; nothing reads it back into the pipeline |
+
+**The rule that defines this architecture: `LAB` is a sandbox, `SERVE` is a
+contract.** Everything else in the document is a consequence of holding that
+line — including the `SERVE` restructuring in §16 (Part 11), where the dynamic
+table underneath was split and rebuilt and the app's contract did not change.
+
+### What runs, and on what
+
+| | |
+|---|---|
+| Compute | three XS warehouses — `WH_INGEST_XS`, `WH_TRANSFORM_XS`, `WH_APP_XS`. `AUTO_SUSPEND = 60`, `GENERATION = '1'`, query acceleration off. Never resized |
+| Always on | pipes and streams only. Both are serverless and idle at zero |
+| Scheduled | tasks gated by `SYSTEM$STREAM_HAS_DATA(...)`; one dynamic table at `TARGET_LAG = 60 minutes`; one data metric function schedule |
+| On demand | dbt, Snowpark training, the app |
+| Attribution | every session sets `QUERY_TAG`; credits per part come back from `QUERY_ATTRIBUTION_HISTORY` (§16, Part 12) |
+
+Nothing in the design runs 24/7, and nothing leaves the account: models are
+trained inside it, the app executes inside it, and no data is copied out to be
+processed elsewhere.
+
+---
+
 ## 1. Account facts and the three findings that shaped this
 
 > **Two kinds of surprise, and they want different responses.** The three
