@@ -114,14 +114,33 @@ SHOW GRANTS TO SHARE SHR_QC_ANALYTICS;
 -- and out of the entitlement table, and the row count follows it. Three states,
 -- measured rather than argued.
 -- =============================================================================
+-- Idempotent: a re-run starts from no entitlement for this account.
+DELETE FROM GOV.ACCOUNT_STORE_ENTITLEMENT WHERE ACCOUNT_LOCATOR = CURRENT_ACCOUNT();
+
 SELECT 'A. no entitlement rows at all' AS STATE,
        (SELECT COUNT(*) FROM SERVE.SHR_V_SLA_DAILY)                   AS ROWS_VISIBLE,
        (SELECT COUNT(DISTINCT STORE_CODE) FROM SERVE.SHR_V_SLA_DAILY) AS STORES_VISIBLE,
        CURRENT_ACCOUNT()                                              AS THIS_ACCOUNT;
 
+-- MART.DIM_STORE, not SERVE.SHR_SLA_DAILY.
+--
+-- THE FIRST RUN INSERTED ZERO ROWS AND THE REASON IS WORTH KEEPING. The
+-- original statement read the store codes from SHR_SLA_DAILY, which already
+-- carries RAP_SHARE_ACCOUNT. With the entitlement table empty the policy
+-- returned FALSE for every row, the subquery saw nothing, and nothing was
+-- inserted -- so states B and C measured the same thing as state A and proved
+-- nothing.
+--
+--   A FAIL-CLOSED POLICY MAKES ITS OWN TABLE USELESS AS A SOURCE FOR THE
+--   ENTITLEMENT DATA THAT WOULD OPEN IT.
+--
+-- The deadlock is not specific to sharing. Any fail-closed control whose
+-- configuration is derived from the thing it controls has it, and the fix is
+-- always the same: seed the entitlement from an object outside the policy's
+-- reach. MART.DIM_STORE carries no policy at all.
 INSERT INTO GOV.ACCOUNT_STORE_ENTITLEMENT (ACCOUNT_LOCATOR, STORE_CODE)
 SELECT CURRENT_ACCOUNT(), STORE_CODE
-FROM  (SELECT DISTINCT STORE_CODE FROM SERVE.SHR_SLA_DAILY ORDER BY STORE_CODE LIMIT 2);
+FROM  (SELECT STORE_CODE FROM MART.DIM_STORE ORDER BY STORE_CODE LIMIT 2);
 
 SELECT 'B. this account entitled to 2 stores' AS STATE,
        (SELECT COUNT(*) FROM SERVE.SHR_V_SLA_DAILY)                   AS ROWS_VISIBLE,
