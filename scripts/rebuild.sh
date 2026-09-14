@@ -45,12 +45,19 @@
 # glob. They are named at the foot of `plan`.
 # -----------------------------------------------------------------------------
 MANIFEST=(
-"gate|Azure foundation|Run in Azure Cloud Shell, and read it first -- it creates billable
-  Azure resources and will ask before each one:
+"gate|Azure foundation|SKIP THIS STEP IF THE STORAGE ACCOUNT ALREADY EXISTS. sql/teardown.sql
+  removes nothing in Azure -- the resource group, the storage account, all four
+  containers, the Event Grid topic and snowpipe-queue survive a teardown intact,
+  and the blobs already in them are what the rebuild re-ingests. Check first:
+      az storage account show --name snowflakeqcpoc25056 -o table
+  If it answers, go straight to step 2.
+
+  Only on a genuinely empty subscription, in Azure Cloud Shell, and read it
+  first -- it creates billable Azure resources and asks before each one:
       bash scripts/p2_azure.sh
-  Creates: resource group, GPv2 storage account with HIERARCHICAL NAMESPACE OFF,
-  three containers (landing, external, docs), the Event Grid system topic and
-  the snowpipe-queue it publishes to."
+  Creates: resource group, GPv2 storage account with HIERARCHICAL NAMESPACE OFF
+  (plain GPv2, never ADLS), four containers (landing, external, docs, archive),
+  the Event Grid system topic and the snowpipe-queue it publishes to."
 "sql|Snowflake foundation|sql/p1_bootstrap.sql"
 "sql|Corrections found in the bootstrap output|sql/p1_fix.sql"
 "gate|Service-user key pairs|Key-pair only. No password is written anywhere:
@@ -62,12 +69,39 @@ MANIFEST=(
       bash scripts/p2_rbac.sh
   rsa_key*, *.p8 and .env are gitignored. Confirm that before the next commit."
 "sql|Azure integrations|sql/p2_integrations.sql"
-"gate|Azure tenant-admin consent|p2_integrations.sql printed AZURE_CONSENT_URL for the storage
-  integration and for the notification integration. Open each in a browser signed
-  in as a TENANT ADMINISTRATOR and accept. Then grant the consented service
-  principal Storage Blob Data READER on landing, external and docs -- reader,
-  never contributor: Snowflake reads those containers and never writes them.
-  DESC INTEGRATION SI_QC_AZURE reprints the URL if it scrolled away."
+"gate|Azure tenant-admin consent and RBAC|THE LONGEST STEP IN THE PROJECT, AND THE ONE THAT WASTES TIME.
+  Three objects were just created and each one minted its OWN service principal:
+  a rebuild does not inherit the consent or the role assignments the previous
+  build had. All three have to be done again, separately.
+
+      DESC EXTERNAL VOLUME EXVOL_QC;      -- expand STORAGE_LOCATIONS for its URL
+      DESC INTEGRATION SI_QC_AZURE;
+      DESC INTEGRATION NI_QC_SNOWPIPE;
+
+  For EACH of the three:
+    1. Read AZURE_CONSENT_URL and AZURE_MULTI_TENANT_APP_NAME from the output.
+    2. Open the consent URL signed in as a TENANT ADMINISTRATOR, accept.
+    3. Azure portal -> Microsoft Entra ID -> Enterprise applications. Search the
+       part of AZURE_MULTI_TENANT_APP_NAME BEFORE the underscore -- the suffix is
+       a request id and will not match anything.
+    4. Assign the role scoped to the CONTAINER, not the storage account:
+
+         EXVOL_QC        archive          Storage Blob Data Contributor
+         SI_QC_AZURE     landing          Storage Blob Data Reader
+         SI_QC_AZURE     external         Storage Blob Data Reader
+         SI_QC_AZURE     docs             Storage Blob Data Reader
+         NI_QC_SNOWPIPE  snowpipe-queue   Storage Queue Data Contributor
+
+       Reader on the three blob containers, never contributor: Snowflake reads
+       them and never writes them. archive is the exception because Iceberg
+       writes there. The queue needs contributor because Snowpipe dequeues.
+
+  RBAC PROPAGATION TAKES ABOUT FIVE MINUTES. Verification failing straight after
+  a grant means wait, not debug. This is the single most common way to lose half
+  an hour on this project.
+
+  THE GATE, and do not go past a failure here -- every Iceberg step depends on it:
+      SELECT SYSTEM\$VERIFY_EXTERNAL_VOLUME('EXVOL_QC');"
 "sql|Stages, file formats, RAW tables|sql/p3_prep.sql"
 "gate|Operational source and broker|On the machine with Docker:
       cd source && docker compose up -d
