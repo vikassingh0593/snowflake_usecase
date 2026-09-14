@@ -1,38 +1,67 @@
 -- =============================================================================
--- PART 12 / ADDENDUM — does this account have a budget, and what is it called?
+-- PART 12 / ADDENDUM — the account budget, reached by CALL rather than SELECT.
 --
--- The account budget has been the one outstanding cost control since Part 3.
--- A budget was created through Snowsight and does not appear on the Budgets
--- page, and the documented method call
+-- WHAT THE FIRST RUN OF THIS FILE ESTABLISHED.
 --
---     SELECT SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT();
+-- BUDGET is the first of thirteen classes SHOW CLASSES returns, so the feature
+-- is present on this account -- unlike Cortex and external access, this is not
+-- a tier gate. But three surfaces that the documentation implies exist do not
+-- exist here:
 --
--- fails with "Unknown user-defined function". That error has two readings and
--- they need different responses:
+--   DESC CLASS SNOWFLAKE.CORE.BUDGET   ->  Unsupported feature 'CLASS'
+--   SHOW BUDGETS IN ACCOUNT            ->  Object type or Class 'BUDGETS'
+--                                          does not exist or not authorized
+--   SNOWFLAKE.ACCOUNT_USAGE.BUDGETS    ->  does not exist or not authorized
 --
---   (a) the method name is wrong -- the budget exists and is reachable under
---       some other name, and nothing is missing;
---   (b) the instance SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET was never created --
---       what Snowsight accepted was a custom budget, or nothing at all.
+-- There is no introspection surface and no catalogue view. The class instance
+-- methods are the only way in, which is also the likeliest reason the Snowsight
+-- Budgets page shows nothing: there is no SHOW command behind it to populate.
 --
--- Part 12 already produced the rule this file obeys: the first probe reported
--- DATA_METRIC_SCHEDULE as available because the ALTER succeeded -- it tested
--- the statement, not the outcome. So this file does not call a method it
--- guessed. It ENUMERATES first (which classes exist, which instances exist,
--- which methods the class declares) and only then calls what it found, with
--- every call isolated so an unknown name costs one row rather than the file.
+-- WHY THE METHOD CALLS FAILED, AND IT WAS NOT THE METHOD NAMES.
 --
--- The discriminator between (a) and (b) is step 7: if a method name fails on
--- ACCOUNT_ROOT_BUDGET and succeeds on some other budget instance, the name is
--- right and the instance is missing. If it fails on both, the name is wrong.
+-- All four methods, called as SELECT instance!METHOD(), returned
 --
--- ON COST. Every statement here is metadata or a scalar method call. Nothing
--- is created except one procedure in LAB, dropped on the last line. Estimated
--- WH_TRANSFORM_XS spend including the 60-second auto-suspend tail: ~0.02
--- credits.
+--     Unknown user-defined function SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!X
 --
--- READ-ONLY against the budget. This file never sets a spending limit and
--- never links a notification integration. Both are decisions, not diagnosis.
+-- which reads as "no such method" and means something narrower. The fifth
+-- attempt is what gave it away. SELECT * FROM TABLE(instance!METHOD())
+-- returned
+--
+--     Invalid stored procedure 'GET_SPENDING_HISTORY' in FROM clause:
+--     Return table must declare a nonzero number of columns
+--
+-- It RESOLVED the name -- as a stored procedure -- and then objected to the
+-- return shape. That is the same zero-column TABLE() signature that broke
+-- ROW_COUNT in p12_quality_lineage.sql. So the instance exists, the methods
+-- exist, and SELECT was the wrong verb: SELECT looks for a user-defined
+-- function, finds no function by that name, and reports the absence of a
+-- function as though it were the absence of the method.
+--
+-- Class instance methods here are PROCEDURES. They are called with CALL.
+--
+-- The lesson generalises past budgets, and it is the same one Part 12 kept
+-- teaching: an error message names what the parser looked for, not what is
+-- missing. "Unknown user-defined function" was never evidence about the
+-- budget.
+--
+-- STRUCTURE. The four calls run twice on purpose.
+--
+--   Pass 1, inside a procedure, one try/except each. snow sql -f aborts the
+--   whole file on the first error, and the point is to learn about four things
+--   rather than the first one. Output is one summary table, truncated.
+--
+--   Pass 2, as plain top-level statements, LAST in the file and after the
+--   procedure is dropped. These print the full result tables rather than a
+--   400-character summary -- GET_SPENDING_HISTORY in particular is a table,
+--   not a scalar. If one of them aborts the run, everything of value has
+--   already printed and nothing is left behind.
+--
+-- ON COST. Metadata and method calls only. One procedure created in LAB and
+-- dropped before pass 2. Estimated WH_TRANSFORM_XS spend including the
+-- 60-second auto-suspend tail: ~0.02 credits.
+--
+-- READ-ONLY. Nothing here calls SET_SPENDING_LIMIT or links a notification
+-- integration. Both are decisions and both need a yes first.
 -- =============================================================================
 USE ROLE ACCOUNTADMIN;
 USE WAREHOUSE WH_TRANSFORM_XS;
@@ -55,6 +84,8 @@ SCHEMA = StructType([
     StructField("DETAIL", StringType()),
 ])
 
+ROOT = "SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET"
+
 
 def run(session):
     rows = []
@@ -63,7 +94,7 @@ def run(session):
         """Fetch a column case- and quote-insensitively.
 
         SHOW output arrives with lowercase quoted identifiers, and Part 12 lost
-        two runs to guessing which spelling a particular SHOW uses -- cluster_by
+        two runs to guessing which spelling a given SHOW uses -- cluster_by
         against clustering_key. Normalising here removes the whole category.
         """
         try:
@@ -78,159 +109,64 @@ def run(session):
                 return flat[n]
         return None
 
-    def attempt(item, stmt, summarise=None):
-        """Run one statement. Record what came back, or the error verbatim.
+    def render(res, limit=3):
+        """Flatten up to `limit` rows into one line.
 
-        Returns the result rows on success and None on failure, so later steps
-        can branch on what actually exists rather than on what should.
+        A method whose shape is unknown is easier to read as values than as a
+        row count, and the shapes here are genuinely unknown -- there is no
+        DESC CLASS on this account to ask.
         """
+        if not res:
+            return "no rows"
+        parts = []
+        for r in res[:limit]:
+            try:
+                d = r.as_dict()
+                parts.append(", ".join("{}={}".format(k, v) for k, v in d.items()))
+            except Exception:
+                parts.append(str(r))
+        tail = "" if len(res) <= limit else " ... +{} more".format(len(res) - limit)
+        return "{} row(s): ".format(len(res)) + " | ".join(parts) + tail
+
+    def attempt(item, stmt, summarise=render):
+        """Run one statement. Record what came back, or the error verbatim."""
         try:
             res = session.sql(stmt).collect()
         except Exception as e:
-            msg = str(e).replace("\n", " ")
-            rows.append((item, "ERROR", msg[:400]))
+            rows.append((item, "ERROR", str(e).replace("\n", " ")[:400]))
             return None
-        if summarise is None:
-            detail = "{} row(s)".format(len(res))
-        else:
-            try:
-                detail = summarise(res)
-            except Exception as e:
-                detail = "{} row(s); summary failed: {}".format(len(res), e)
+        try:
+            detail = summarise(res)
+        except Exception as e:
+            detail = "{} row(s); summary failed: {}".format(len(res), e)
         rows.append((item, "OK", str(detail)[:400]))
         return res
 
-    def names_of(res, *cols):
-        out = []
-        for r in res:
-            v = col(r, *cols)
-            if v is not None:
-                out.append(str(v))
-        if not out:
-            return "{} row(s), no name column".format(len(res))
-        return "{}: {}".format(len(out), ", ".join(out[:40]))
-
-    def scalar(res):
-        if not res:
-            return "no rows"
-        first = res[0]
-        try:
-            vals = list(first.as_dict().values())
-        except Exception:
-            return str(first)
-        return " | ".join(str(v) for v in vals)[:400]
-
-    # -- 1. what classes exist at all -----------------------------------------
-    # If BUDGET is not among them the feature is absent from this account and
-    # every later step is noise. This is the tier-gate question.
-    attempt(
-        "classes in account",
-        "SHOW CLASSES IN ACCOUNT",
-        lambda res: names_of(res, "name"),
-    )
-
-    # -- 2. which budget instances exist ---------------------------------------
-    # THE DECISIVE STEP for reading (b). ACCOUNT_ROOT_BUDGET present here means
-    # the instance exists and only the method name was wrong.
-    inst = attempt(
-        "instances of SNOWFLAKE.CORE.BUDGET",
-        "SHOW INSTANCES OF CLASS SNOWFLAKE.CORE.BUDGET",
-        lambda res: names_of(res, "name"),
-    )
-
-    # -- 3. what methods does the class declare -------------------------------
-    # Two spellings attempted because neither is verified. Whichever answers
-    # gives the real method names and ends the guessing for good.
-    attempt(
-        "DESC CLASS budget",
-        "DESC CLASS SNOWFLAKE.CORE.BUDGET",
-        lambda res: names_of(res, "name", "method_name", "property"),
-    )
-    attempt(
-        "SHOW METHODS in class",
-        "SHOW METHODS IN CLASS SNOWFLAKE.CORE.BUDGET",
-        lambda res: names_of(res, "name", "method_name"),
-    )
-
-    # -- 4. the SHOW surface ---------------------------------------------------
-    # Custom budgets are expected here. Whether the account root budget also
-    # appears is unverified, and its absence proves nothing on its own.
-    attempt(
-        "SHOW BUDGETS IN ACCOUNT",
-        "SHOW BUDGETS IN ACCOUNT",
-        lambda res: names_of(res, "name"),
-    )
-
-    # -- 5. the catalogue surface ---------------------------------------------
-    attempt(
-        "ACCOUNT_USAGE.BUDGETS",
-        "SELECT COUNT(*) AS N FROM SNOWFLAKE.ACCOUNT_USAGE.BUDGETS",
-        scalar,
-    )
-
-    # -- 6. method calls against the account root budget -----------------------
-    # Every name that has been seen in documentation or inferred, each isolated.
-    # The point is not that one works; it is which ones fail and how.
-    root = "SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET"
-    root_methods = [
-        "GET_SPENDING_LIMIT()",
-        "SHOW_BUDGET_DETAILS()",
-        "GET_LINKED_NOTIFICATION_INTEGRATION()",
-        "GET_SPENDING_HISTORY()",
-    ]
-    for m in root_methods:
+    # -- the four methods, by CALL ---------------------------------------------
+    # Ordered by what each settles. GET_SPENDING_LIMIT answers the original
+    # question -- did the limit created in Snowsight actually land. The rest
+    # describe what landed.
+    for method in (
+        "GET_SPENDING_LIMIT",
+        "SHOW_BUDGET_DETAILS",
+        "GET_LINKED_NOTIFICATION_INTEGRATION",
+        "GET_SPENDING_HISTORY",
+    ):
         attempt(
-            "root!{}".format(m),
-            "SELECT {}!{}".format(root, m),
-            scalar,
+            "CALL root!{}()".format(method),
+            "CALL {}!{}()".format(ROOT, method),
         )
-    # GET_SPENDING_HISTORY may be a table function rather than a scalar; the
-    # scalar form above will have said so. Attempt the table form regardless.
-    attempt(
-        "root!GET_SPENDING_HISTORY as table",
-        "SELECT * FROM TABLE({}!GET_SPENDING_HISTORY())".format(root),
-        lambda res: "{} row(s)".format(len(res)),
-    )
 
-    # -- 7. the discriminator --------------------------------------------------
-    # Run the same method names against whatever instances step 2 found. A name
-    # that fails on the root and succeeds here is a correct name pointing at a
-    # missing instance -- reading (b). Failing on both means the name is wrong
-    # -- reading (a) -- and step 3's output has the right one.
-    others = []
-    if inst:
-        for r in inst:
-            nm = col(r, "name")
-            db = col(r, "database_name")
-            sc = col(r, "schema_name")
-            if nm is None:
-                continue
-            fq = ".".join([p for p in (db, sc, nm) if p])
-            if fq.upper() != root:
-                others.append(fq)
-    if not others:
-        rows.append((
-            "discriminator",
-            "SKIP",
-            "no budget instance other than the root to compare against",
-        ))
-    else:
-        for fq in others[:3]:
-            attempt(
-                "{}!GET_SPENDING_LIMIT()".format(fq),
-                "SELECT {}!GET_SPENDING_LIMIT()".format(fq),
-                scalar,
-            )
-
-    # -- 8. what is actually guarding spend right now --------------------------
-    # Whatever the budget turns out to be, the resource monitor is the control
-    # that has been in force for twelve parts, and it sees warehouse compute
-    # only. Reprinted here so the answer is on one screen.
+    # -- what is actually guarding spend right now -----------------------------
+    # RM_POC has been the only control in force for twelve parts and it reads
+    # level=WAREHOUSE, which is the gap restated: serverless refresh, pipes and
+    # search optimization are not in its used_credits figure. Reprinted so the
+    # budget answer and the monitor answer land on one screen.
     attempt(
         "resource monitors",
         "SHOW RESOURCE MONITORS",
         lambda res: "; ".join(
-            "{} credit_quota={} used={} level={}".format(
+            "{} quota={} used={} level={}".format(
                 col(r, "name"),
                 col(r, "credit_quota"),
                 col(r, "used_credits"),
@@ -246,3 +182,17 @@ $$;
 CALL LAB.TMP_BUDGET_PROBE();
 
 DROP PROCEDURE IF EXISTS LAB.TMP_BUDGET_PROBE();
+
+-- =============================================================================
+-- PASS 2 — the same four calls, unsummarised, last in the file.
+--
+-- Everything above has already printed and the procedure is already dropped,
+-- so an abort here costs nothing. Full tables, not 400-character summaries.
+-- =============================================================================
+CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT();
+
+CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!SHOW_BUDGET_DETAILS();
+
+CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_LINKED_NOTIFICATION_INTEGRATION();
+
+CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_HISTORY();
