@@ -315,7 +315,7 @@ cmd_teardown() {
     warn "this is not recoverable except by rebuilding"
     confirm "About to run sql/teardown.sql against connection '$CONN'."
     snow_file sql/teardown.sql
-    ok "teardown run — check the eight SHOW results above are empty"
+    ok "teardown run — every REMAINING above should read 0 except the last"
 }
 
 cmd_build() {
