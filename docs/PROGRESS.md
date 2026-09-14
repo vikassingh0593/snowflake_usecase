@@ -1041,12 +1041,11 @@ bookmark-safe. `PACKAGES` listed 1.52.2 so it looked like the runtime.
 
 ---
 
-## Part 12 — governance (in progress)
+## Part 12 — governance, complete
 
-Eleven concerns in the §12 design. Seven are built and measured, two are
-written and not yet run, two are not started. Files: `p12_probe.sql`,
-`p12_policies.sql`, `p12_classify_response.sql`, `p12_quality_lineage.sql`,
-`p12_serverless.sql`.
+Eleven concerns in the §12 design, all eleven built and measured. Files:
+`p12_probe.sql`, `p12_policies.sql`, `p12_classify_response.sql`,
+`p12_quality_lineage.sql`, `p12_serverless.sql`, `p12_alert.sql`.
 
 ### What this account has
 
@@ -1203,14 +1202,116 @@ discipline is applied rigorously to *capabilities* — can this account do X —
 and was not being applied to *signatures*. The probe pattern needs extending:
 attempt the exact call, not the family it belongs to.
 
-### Not yet done in this part
+### The two serverless features, measured and dropped
 
-- `p12_serverless.sql` is written and unrun — search optimization and the
-  materialized view, estimated, built, measured and dropped in one file. The
-  recorded prediction is that `FCT_ORDER` is a single micro-partition, so
-  neither can help and both would cost.
-- **Alerting.** The alert and the email notification integration both probed
-  available. Needs a seeded `OPS.DQ_RESULTS` failure to fire on.
+The prediction was recorded before anything was built: `MART.FCT_ORDER` at
+20,000 narrow rows is one micro-partition, both features work by skipping
+partitions, so neither can help. `SYSTEM$CLUSTERING_INFORMATION` confirmed it
+**for free, before the estimate**:
+
+```
+"total_partition_count" : 1, "average_overlaps" : 0.0, "average_depth" : 1.0
+```
+
+| | before | after |
+|---|---|---|
+| bytes scanned | **1,981,440** | **1,981,440** |
+| exec ms | 131 | 18 |
+
+Identical bytes — zero pruning benefit. The time difference is warehouse
+warm-up; `search_optimization_progress` sat at `0` throughout, so the structure
+never finished building and the "after" measurement was not even measuring it.
+Bytes scanned is the number that measures pruning and it did not move. Build
+cost was estimated at 0.000323 credits plus storage, for nothing.
+
+**The design says estimate, build, measure, drop. The free query comes before
+all of it: count partitions, and if there is one, stop.**
+
+**My baseline was invalid the first time and that is worth recording.** It came
+back `BYTES_SCANNED 0, EXEC_MS 1` with one operator reading `QUERY RESULT
+REUSE` — the query had run in an earlier attempt so the result was cached and
+never executed. I compared a cache hit against a real scan and would have
+reported a 100% improvement. **Any before-and-after in Snowflake needs `ALTER
+SESSION SET USE_CACHED_RESULT = FALSE` first.**
+
+### A governance control and a performance feature that cannot coexist
+
+```
+000002 (0A000): Unsupported feature 'Create Materialized view on entity
+protected by row access policy'.
+```
+
+The row access policy this part attached to `MART.FCT_ORDER` makes materialized
+views on that table **impossible** — refused outright, not slower. Two features
+documented pages apart, mutually exclusive on the same table, and neither one's
+documentation is where you find out.
+
+It surfaced only because both were built. Reviewed feature by feature, a design
+containing both looks entirely reasonable.
+
+The materialized view was also refused for the expected reason — `More than one
+table referenced` — so `SERVE.SLA_STORE_HOUR_AGG`, which joins the fact to the
+store dimension, could never have been an MV. The legal version moved to
+`FCT_ORDER_ITEM` and agreed exactly with the straight aggregate at `behind_by:
+0s`. Both refusals are probed inside a procedure now, which is how the second
+one was found: by a file that aborted on it.
+
+### The alert drill found a check that had been red for two parts
+
+Forty-odd checks, all green, which is pleasant and useless — a check nobody
+reads will be green on the day it matters too. So the drill seeds a failure,
+fires the alert by hand with `EXECUTE ALERT`, and confirms the row it wrote.
+
+It caught the seeded row **and two others nobody had seen**:
+
+`label_does_not_appear_in_the_text` had been failing since Part 10. It matched
+reason codes with `ILIKE`, and **`PACKAGING` is an ordinary English word** — ten
+complaints say "packaging" in prose and only two are PACKAGING tickets. The
+check was not testing label leakage, it was testing whether English contains a
+word. It went unseen because the summary that prints it is `LIMIT 6` and it
+sorted out of view. Now case-sensitive, which tests the thing that would
+actually leak: the literal upper-case code with its underscore.
+
+`vectors_are_not_all_the_same` was a different failure mode. **Renaming a check
+orphans its last result.** It was renamed in Part 10 after failing on a false
+assumption, so the old name's final row — a failure — is permanently the latest
+result for a check that no longer runs, and any "is anything failing" query
+answers yes forever. An append-only check log needs a cleanup on every rename.
+
+`no_check_is_currently_failing` now reports **0**.
+
+The alert is created suspended (confirmed from `SHOW`, not assumed), executed
+once by hand, and dropped before the file ends. The email integration is built;
+the send is left as a statement to run by hand, because sending mail is
+outward-facing and nobody should learn a script sends email by receiving one.
+No address is hard-coded in this repository.
+
+### Twelve signature errors, and why the local validation did not catch them
+
+The failures in this part are listed above. The count reached twelve, and the
+reason they kept happening is worth more than the list.
+
+**I validated the wrong things.** Paren balance and Python syntax catch nothing
+about column names, return types or clause semantics, which is what every one
+of the twelve was. **And the validator was itself broken** — it stripped `--`
+comments *before* string literals, so any `EXPECTED` text containing `--`, which
+most of them do, corrupted the parse from that point on. It reported clean on
+correct files and dirty on correct files, so it carried no information in
+either direction. Stripping literals first fixes it; all fourteen files balance.
+
+**Two of the twelve were repeats.** `QUALIFY` after aggregation is the same
+shape as the `NTILE` case in Part 10 — a window clause referencing a raw column
+in a query that aggregates. I wrote that lesson into these docs and then made it
+again two parts later.
+
+The rule that would have prevented most of them is mechanical rather than a
+judgement call: **for any catalogue object or table function whose output has
+not been seen in this session, `SELECT *` first.** It is already used in three
+files in this part, applied unevenly.
+
+---
+
+
 
 ---
 
@@ -1288,12 +1389,10 @@ rather than by `SHOW`.
 | `APP` | complete — Part 11, `QC_CONSOLE` deployed and its write-back verified |
 | `GOV` | Part 12 — 3 masking policies, 1 row access policy, a PII tag, entitlements, classification history |
 
-**Part 12 is seven of eleven.** Two files remain: `p12_serverless.sql` is
-written and unrun, and alerting on a seeded `OPS.DQ_RESULTS` failure is not
-started. Both pieces of the alert — the alert object and the email notification
-integration — probed available.
+**Part 12 is complete at eleven of eleven**, and every check in the project
+passes on its latest run — `no_check_is_currently_failing` reports 0.
 
-**Then Part 13 — outbound serving.** Reader account, private listing, SQL API.
+**Next is Part 13 — outbound serving.** Reader account, private listing, SQL API.
 `SERVE` is built and now governed, which is what makes sharing it a reasonable
 thing to do rather than a reckless one.
 
@@ -1330,11 +1429,16 @@ Carry three lessons forward.
   runtime executes 1.22.0. The same shape produced the `DEFAULT_PACKAGES`
   error and the wrong claim about `CREATE OR REPLACE` preserving `url_id` —
   reading a value and assuming what it implies, instead of testing it.
-- From Part 12: **probe the exact call, not the family it belongs to.** Ten
-  signature errors in one part, nine of them the same mistake — inferring an
+- From Part 12: **probe the exact call, not the family it belongs to.** Twelve
+  signature errors in one part, most of them the same mistake — inferring an
   API's shape from how output rendered or from what an adjacent feature does.
-  The capability probes in this project work; the discipline was never being
-  applied to signatures.
+  The capability probes in this project work; the discipline was never applied
+  to signatures. The mechanical form: if this session has not seen an object's
+  output, `SELECT *` before naming a column of it.
+- From Part 12, second: **a green check log is not evidence that nothing is
+  wrong.** Forty checks were green and one had been red for two parts, hidden
+  under a `LIMIT 6`. An alert that reads the latest result per check is what
+  found it, and the only way to know an alert works is to break something.
 
 ### Row counts as they stand
 
@@ -1425,6 +1529,7 @@ Part 13 extends `SERVE` outward — reader account, private listing, SQL API.
 | `sql/p12_classify_response.sql` | Acts on what the classifier found and on what it missed |
 | `sql/p12_quality_lineage.sql` | One rule three ways, lineage three ways, credits per part |
 | `sql/p12_serverless.sql` | Search optimization and the materialized view. Estimate, build, measure, drop |
+| `sql/p12_alert.sql` | Alert on a seeded failure, then dropped. Email built, not sent |
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |

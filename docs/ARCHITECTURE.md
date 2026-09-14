@@ -838,10 +838,9 @@ from the stage when opened. `CREATE STREAMLIT` is only needed the first time or
 when an object property changes — `CREATE OR REPLACE` issues a new `url_id` and
 breaks every bookmark.
 
-### Governance as built — Part 12 (in progress)
+### Governance as built — Part 12
 
-Seven of eleven concerns built and measured, two written and unrun, two not
-started.
+All eleven concerns built and measured.
 
 **Capability, by attempting it.** Fourteen isolated attempts in one procedure;
 twelve available. Masking policies, row access policies, tag-based masking,
@@ -861,8 +860,9 @@ than a privilege refusal, so it is an API that moved:
 | Data quality | DMF, dbt test and SQL check on one rule | the DMF is the only one that runs when nobody runs anything |
 | Lineage | `ACCESS_HISTORY` vs `QUERY_HISTORY` vs `OBJECT_DEPENDENCIES` | only the first knows which columns were read |
 | Cost attribution | `QUERY_ATTRIBUTION_HISTORY` by `QUERY_TAG` | 0.3844 attributed credits, p09 at 34.7% |
-| Search optimization / MV | written, unrun | prediction recorded: one micro-partition, so neither helps |
-| Alerting | not started | both pieces probed available |
+| Search optimization | built, measured, dropped | **1,981,440 bytes scanned before and after** — zero pruning on one partition |
+| Materialized view | refused twice, then built elsewhere | **a row access policy makes MVs on that table impossible** |
+| Alerting | fired on a seeded failure, then dropped | found a check that had been red for two parts |
 
 **Verified by role, not by grant.** `QC_ANALYST` sees `A***********`, a SHA2
 hash, `XXXXXXXXX0819`, `28.55` for a coordinate stored as `28.547024`, and
@@ -902,9 +902,34 @@ silently clears every column assignment. **A governance script that runs once
 and then aborts is one nobody re-runs**, which is how protection quietly stops
 matching intent.
 
-**Ten signature errors in this part**, listed in `PROGRESS.md`. Nine reduce to
-one mistake: inferring an API's shape from how output *rendered*, or from what
-an adjacent feature does. This project probes *capabilities* rigorously — can
+**The two serverless features cost something and returned nothing, and the
+free query said so first.** `SYSTEM$CLUSTERING_INFORMATION` reports
+`total_partition_count: 1` on `MART.FCT_ORDER`. Both features work by skipping
+partitions; with one there is nothing to skip. Measured: 1,981,440 bytes
+scanned before and after, identical. The design's order is estimate, build,
+measure, drop — **count partitions first, and if there is one, stop.**
+
+A baseline taken without `ALTER SESSION SET USE_CACHED_RESULT = FALSE` is not a
+baseline. The first attempt returned `BYTES_SCANNED 0` from the result cache and
+would have been reported as a 100% improvement.
+
+**A row access policy and a materialized view cannot coexist on one table.**
+`Unsupported feature 'Create Materialized view on entity protected by row
+access policy'` — refused outright. Two features documented pages apart, and
+the collision surfaces only when both are built. A design reviewed feature by
+feature ships both.
+
+**Alerting is the answer to a check log nobody reads.** Forty-odd checks were
+green; the drill found one that had been red since Part 10, invisible under a
+`LIMIT 6`, and a second that was red because **renaming a check orphans its
+last result** in an append-only log. Every check in the project now passes on
+its latest run.
+
+**Twelve signature errors in this part**, listed in `PROGRESS.md`, and the
+local validation that should have caught them was itself broken — it stripped
+`--` comments before string literals, so every `EXPECTED` text containing `--`
+corrupted the parse. It reported clean and dirty on correct files alike. Nine reduce  to one mistake: inferring an API's shape from how output
+*rendered*, or from what an adjacent feature does. This project probes *capabilities* rigorously — can
 this account do X — and was not probing *signatures*. The discipline needs
 extending to the exact call rather than the family it belongs to.
 
@@ -937,11 +962,9 @@ extending to the exact call rather than the family it belongs to.
   container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
 - **Outbound serving.** Reader account, private listing and the SQL API are
   Part 13. `SERVE` itself is built — Part 11.
-- **Part 12, finishing.** `p12_serverless.sql` is written and unrun; alerting
-  on a seeded `OPS.DQ_RESULTS` failure is not started.
 - **Parts 13 through 15.** Outbound serving — reader account, private listing,
   SQL API (13), CI/CD (14), the cost model closed out against measured
-  credits (15). Parts 10 and 11 are built; 12 is seven of eleven.
+  credits (15). Parts 10, 11 and 12 are built.
 
 ---
 

@@ -378,6 +378,25 @@ output is kept and compared run to run, so a column that *starts* being
 classified as identifying — because what is stored in it changed — raises an
 alarm rather than passing unnoticed.
 
+### Every quality check is watched, and the watching was tested by breaking something
+
+Around forty automated checks run across the platform, covering row counts,
+money arithmetic, model behaviour and access rules. All of them were green,
+which sounds reassuring and is not: a check nobody reads will be green on the
+day it matters too.
+
+So an alert was built over them, and then a check was deliberately broken to
+see whether it fired. It did — and it also caught two genuine problems nobody
+had noticed. One check had been failing for two stages of the build, hidden
+because the summary screen shows only the most recent handful. Another was
+failing because a check had been renamed, leaving its final failed result
+standing forever as the newest answer for a name nothing reports under any
+more.
+
+Both are fixed and every check now passes. The point is not the two bugs, it
+is that **a quality framework nobody is alerted by is a quality framework that
+reports whatever it last happened to say.**
+
 ---
 
 ## 12. Cost controls
@@ -446,7 +465,7 @@ training procedure.
 | **Risk scoring** | **Complete** |
 | **Text classification** | **Complete** |
 | **Application layer** | **Complete** |
-| **Governance** | **Substantially complete** — 7 of 11 controls built and verified |
+| **Governance** | **Complete** — 11 of 11 controls built and verified |
 | Forecasting | Not started |
 | Outbound sharing | Not started |
 
