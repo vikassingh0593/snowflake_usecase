@@ -55,10 +55,21 @@ if [ "${REBUILD:-0}" = "1" ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1;
   docker build -q -t "$IMAGE" dbt/
 fi
 
+# dbt_packages/ is not committed -- package-lock.yml is, which pins the version
+# without carrying 229 files of someone else's code. Resolve on first use. Every
+# model in MART calls dbt_utils.generate_surrogate_key, so without this a fresh
+# clone fails on the first model with "'dbt_utils' is undefined", which names
+# the symptom and not the cause.
+if [ ! -d dbt/dbt_packages ] && [ "${1:-}" != "deps" ]; then
+  echo "== dbt_packages/ absent, resolving from package-lock.yml (once)"
+  docker run --rm -v "$PWD":/work "$IMAGE" deps --profiles-dir . --target dev
+fi
+
 # --profiles-dir . because profiles.yml lives beside dbt_project.yml rather than
 # in ~/.dbt. Keeping it in the repo is what makes the image stateless: nothing
 # about the connection lives in the container or in a home directory.
 docker run --rm -it \
   -v "$PWD":/work \
   -e DBT_KEY_PATH=/work/rsa_ci.p8 \
+  -e DBT_QUERY_TAG="${DBT_QUERY_TAG:-p08:dbt}" \
   "$IMAGE" "$@" --profiles-dir . --target dev
