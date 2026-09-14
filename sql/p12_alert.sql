@@ -103,7 +103,10 @@ EXECUTE ALERT OPS.ALERT_DQ_FAILED;
 -- run. ALERT_HISTORY is the record of what actually happened, and a row in
 -- OPS.ALERT_LOG is the proof the action reached its target.
 -- =============================================================================
-SELECT NAME, STATE, SCHEDULED_TIME, COMPLETED_TIME, ROWS_INSERTED, ERROR_CODE, ERROR_MESSAGE
+-- SELECT *, because the shape of ALERT_HISTORY has not been seen here and
+-- naming columns from memory is what has gone wrong twelve times in this
+-- part. There is no ROWS_INSERTED on it -- that was the twelfth.
+SELECT *
 FROM   TABLE(INFORMATION_SCHEMA.ALERT_HISTORY(
               SCHEDULED_TIME_RANGE_START => DATEADD('hour', -1, CURRENT_TIMESTAMP())))
 WHERE  NAME = 'ALERT_DQ_FAILED'
@@ -115,6 +118,8 @@ SELECT * FROM OPS.ALERT_LOG ORDER BY FIRED_AT DESC LIMIT 5;
 -- =============================================================================
 -- STEP 5 — clean up the drill, then the alert.
 -- =============================================================================
+-- Removes every seeded row, including any left by a run that aborted between
+-- the seed and here -- which is exactly what happened on the first attempt.
 DELETE FROM OPS.DQ_RESULTS WHERE CHECK_NAME = 'zzz_drill_seeded_failure';
 
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
