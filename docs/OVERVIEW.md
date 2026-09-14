@@ -513,7 +513,7 @@ listing — they are found only by running the thing and reading the error.
 
 | Constraint | Consequence |
 |---|---|
-| **Managed AI text functions unavailable** — account tier | Complaint classification, sentiment and embeddings are built as trained models running in the warehouse rather than called as a managed service |
+| **Managed AI text functions mostly unavailable** — account tier | Twelve of fourteen refuse. Classification, sentiment and embeddings are built as trained models running in the warehouse rather than called as a managed service. Two summarisation functions do work — found in the billing on 2026-09-14, six parts after the capability was written off, and nothing was built on them |
 | **Enterprise-grade governance available** | Protection attaches directly to columns and rows; the restricted-view approximation is built alongside for comparison rather than out of necessity |
 | **Outbound network access unavailable** — account tier | Route 11 cannot be built. The network rule and the secret both create successfully; only the integration that binds them to a function is refused |
 

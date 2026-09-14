@@ -122,20 +122,77 @@ processed elsewhere.
 | Azure | subscription `d27ba827-26e0-419a-bc0b-2b1015e641bb`, tenant `vikassingh0593gmail.onmicrosoft.com`, region `westus2`, RG `rg-qcpoc` |
 | Pre-existing SA `snowflakefreeedition` | in RG `databricksfreeedition`. **Not ours.** Reuse only if `location = westus2` **and** `isHnsEnabled = false` |
 
-### Finding 1 — Cortex AI functions are unavailable
+### Finding 1 — Cortex AI functions are *mostly* unavailable
 
-Both required grants are present (`USE AI FUNCTIONS` at account level, `SNOWFLAKE.CORTEX_USER`
-database role) and calls still fail:
+> **Corrected on 2026-09-14, by the billing record rather than by a probe.**
+> This finding read "AI functions are unavailable" for six parts. Two of them
+> were never unavailable. The original text and how it failed are kept below,
+> because the failure is more useful than the correction.
 
-> `AI function AI_CLASSIFY is not available for trial accounts.`
+Both required grants are present (`USE AI FUNCTIONS` at account level,
+`SNOWFLAKE.CORTEX_USER` database role) and twelve of fourteen functions still fail:
 
-`AI_COMPLETE`, `AI_CLASSIFY`, `AI_FILTER`, `AI_EXTRACT`, `AI_SIMILARITY`, `AI_EMBED`,
-`SENTIMENT`, `EMBED_TEXT_768` and legacy `COMPLETE` all fail identically. The gate is the
-**account type**, not the edition and not a privilege. Everything downstream of an LLM
-goes with it: Cortex Search (needs embeddings), Cortex Analyst, CoWork, and Semantic View
-Autopilot — Autopilot is GA and edition-independent but generates DDL with an LLM.
+> `399258 (0A000): AI function AI_CLASSIFY is not available for trial accounts.`
 
-Only a conversion to a paid account lifts this.
+Measured by calling all fourteen, `sql/p12_ai_recheck.sql`:
+
+| Function | Verdict | The gate names |
+|---|---|---|
+| `AI_AGG` | **works** | — |
+| `AI_SUMMARIZE_AGG` | **works** | — |
+| `AI_COMPLETE` | gated | `_COMPLETE_WITH_PROMPT_HISTORY_LLM` |
+| `AI_SIMILARITY` | gated | `_AI_EMBED_WITH_PROMPT_1024` |
+| `AI_EMBED` | gated | `_AI_EMBED_WITH_PROMPT_768` |
+| `AI_FILTER` | gated | `_AI_FILTER_WITH_PROMPT` |
+| `AI_EXTRACT` · `AI_SENTIMENT` · `AI_CLASSIFY` | gated | `_AI_EXTRACT` · `_AI_SENTIMENT` · itself |
+| `SNOWFLAKE.CORTEX.` `SENTIMENT` · `SUMMARIZE` · `COMPLETE` · `EMBED_TEXT_768` · `TRANSLATE` | gated | themselves |
+
+**The gate is on the underlying primitive, not the surface function.**
+`AI_SIMILARITY` is refused as `_AI_EMBED_WITH_PROMPT_1024` — it is an embedding
+call wearing a different name, and the refusal says so. That is why the two
+aggregates survive: they reach something the gate does not cover. Whether that
+is a carve-out or an inconsistency is **UNVERIFIED**; what is measured is that
+two LLM-backed functions run on an account documented as having none.
+
+The gate is still the **account type**, not the edition and not a privilege, and
+everything needing embeddings goes with it: Cortex Search, Cortex Analyst,
+CoWork, and Semantic View Autopilot — Autopilot is GA and edition-independent
+but generates DDL with an LLM. Only a conversion to a paid account lifts it.
+
+#### How this was wrong for six parts
+
+The Part 0 probe tested each function and recorded a verdict per function. This
+finding recorded a conclusion about the *account*: nine refusals became
+"everything downstream of an LLM goes with it", and two successes in the same
+run did not survive the summary. `AI_AGG` and `AI_SUMMARIZE_AGG` were never in
+the list of nine — their absence read as untested rather than as unrecorded.
+
+Nothing re-reading the probe would have caught it. The correction came from
+`ACCOUNT_USAGE.CORTEX_AI_FUNCTIONS_USAGE_HISTORY`, which had been carrying the
+contradiction since the day the probe ran:
+
+```
+FUNCTION_NAME     QUERY_TAG   TOKENS  CREDITS      IS_COMPLETED
+AI_AGG            p00:probe   163     0.00030155   True
+AI_SUMMARIZE_AGG  p00:probe   181     0.00033485   True
+```
+
+**The spend is a harder test than the probe.** A probe reports what it believes
+it observed; billing reports what the platform actually did, and it has no
+opinion about what ought to have worked. This is the same failure as the Part 12
+data metric function — the probe reported the schedule as available because the
+`ALTER` succeeded, testing the statement rather than the outcome — arriving from
+the opposite direction: here the statement succeeded and the *summary* discarded
+it.
+
+**What it cost.** Part 10 classified 300 complaints with TF-IDF and logistic
+regression on the basis of this finding, and that classifier scores 5.41% on
+genuinely novel phrasings — below a uniform guess over ten classes (§16, Part
+10). `AI_CLASSIFY` is genuinely gated, so the classifier could not have been
+built the obvious way. But `AI_AGG` takes a free-text instruction, and an
+aggregate over a single-row group is a scalar. **The comparison Part 10 never
+ran is still available** and costs roughly 0.05 credits at the observed rate of
+0.0003 per ~170 tokens.
 
 ### Finding 2 — the account is Enterprise-shaped, not Standard
 
@@ -144,10 +201,12 @@ Only a conversion to a paid account lifts this.
 a `CREATE MASKING POLICY` in a throwaway database before relying on it — a `SHOW` that
 returns an empty set is not proof.
 
-**Net effect.** The AI layer left; the governance layer arrived. Section 12 is where this
-project now does its most interesting work, and it is stronger than the AI layer would
-have been: every control is built twice, the Enterprise way and the Standard way, and
-compared.
+**Net effect.** Almost all of the AI layer left; the governance layer arrived. Section 12
+is where this project now does its most interesting work, and it is stronger than the AI
+layer would have been: every control is built twice, the Enterprise way and the Standard
+way, and compared. The two surviving AI functions (§1 Finding 1) do not change that —
+they arrived as a correction to the record six parts after the fact, not as a capability
+anything was built on.
 
 ---
 
@@ -792,7 +851,9 @@ in `p9_features.sql` as a comment.
 ### Text and classification as built — Part 10
 
 300 complaint PDFs, ten reason codes, 60 hand labels, 240 to classify. Built
-without Cortex, which is unavailable (§1 Finding 1).
+without Cortex. `AI_CLASSIFY` is gated on this account (§1 Finding 1) so the obvious
+route was closed — though the correction to Finding 1 on 2026-09-14 means `AI_AGG` was
+available throughout and an LLM comparison was possible. It was not run.
 
 | Object | What |
 |---|---|
