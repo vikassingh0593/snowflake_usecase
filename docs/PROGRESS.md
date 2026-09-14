@@ -1423,12 +1423,97 @@ stage was driven by hand. Marked as design in the architecture doc.
 
 ### The number that reframes the cost model
 
-0.3844 attributed query credits against 5.3941 metered. **93% of warehouse spend
-is not query execution** — it is resume overhead and the 60-second suspend tail,
+1.1574 attributed query credits against 5.7688 metered. **79.9% of warehouse
+spend is not query execution** — it is resume overhead and the 60-second suspend
+tail,
 paid hundreds of times for statements lasting seconds. At this scale batching
 statements matters far more than warehouse size, which is the opposite of the
 usual advice. Serverless, the thing the cost rules were written to guard
 against, came to 0.016307 credits — 0.30%.
+
+---
+
+## Session 5 — 2026-09-14 — Parts 13, 14 and 15, and the finding
+
+Part 13 set out to probe four outbound surfaces. It found five defects, two of
+which had nothing to do with sharing, and produced the one result from this
+whole project that is not in anyone's documentation.
+
+### Part 13 — outbound
+
+Three surfaces built, one skipped by choice. Shares work, including
+`SECURE_OBJECTS_ONLY = FALSE`. Listings parse, resolve the share and reach
+manifest validation; only a Snowsight provider profile is missing. The SQL API
+script computes the key fingerprint from the private key rather than asking for
+a pasted one. **No reader account** — `CREATE MANAGED ACCOUNT` spawns a billable
+child account, and the capability worth demonstrating is the share, not the
+consumer.
+
+**The defect that mattered.** `SERVE.SLA_STORE_HOUR_AGG` is a dynamic table
+refreshed under `ACCOUNTADMIN`; `RAP_STORE` filters `MART.FCT_ORDER` and cannot
+filter rows already written down. `QC_ANALYST`, verified in Part 12 as seeing 3
+of 8 stores, was seeing **all 8** through the app's Operations screen and had
+been since Part 11. Fixed with a second policy keyed on `STORE_CODE` — **a
+policy does not follow a key change** — and measured back to 3.
+
+**The share needed a pattern, not a grant.** Both role-keyed policies filter on
+`CURRENT_ROLE()`, and a consumer account has no `QC_ANALYST`, so after the fix
+every path returned zero rows to a consumer. `SERVE.SHR_SLA_DAILY` is therefore
+a table built by the exempt role, carrying only an account-keyed policy — which
+is the same laundering, used deliberately. 0 rows / 120 rows / 0 rows across the
+three entitlement states.
+
+**A fail-closed policy deadlocks its own configuration.** The first entitlement
+insert read its store codes from the table it was entitling and inserted
+nothing. Seeded from `MART.DIM_STORE` instead.
+
+### Part 14 — CI/CD
+
+A `git_https_api` integration is **not** gated, where an external access
+integration is. `EXECUTE IMMEDIATE FROM` refused with *Unsupported statement
+type 'USE'* — it runs a file as a Scripting block, and **all 55 files here open
+with four `USE` statements**, so none of them is deployable. `sql/deploy/` now
+holds files written to the narrower contract. **A zero-copy clone carries the
+row access policy**, verified by role: 3 stores on the clone, 3 on the original.
+
+`scripts/sqllint.sh` catches the four mistakes that have actually cost round
+trips, and found three real defects in already-run Part 13 files on its first
+run across the corpus.
+
+### Part 15 — the cost
+
+**5.869 credits over eight days, 7.3% of the budget.** 99.68% warehouse, 0.32%
+serverless, 47.8 MB of storage.
+
+Two corrections to numbers written this morning. The idle share was recorded as
+93% from a partial attribution read; with attribution caught up it is **79.9%**
+— 1.1574 attributed against 5.7688 metered. And `OPS.DQ_RESULTS.OBSERVED` is
+`NUMBER` with no scale, so **every fractional check value since Part 3 has been
+silently rounded to an integer**.
+
+**The Streamlit console is 50.7% of attributed query spend from 36 queries** —
+0.0163 credits each against p12's 0.0010, sixteen times the cost per query of
+anything else. A console opened briefly for a demo outspent the model training
+and the entire governance build combined.
+
+### The finding
+
+Four mechanisms derive an object from a protected one, and all four behave
+differently:
+
+| Derivation | Row filter | Found out |
+|---|---|---|
+| Materialised | **lost** | never, unless checked by role |
+| Materialized view | refused at `CREATE` | immediately |
+| Share | **accepted both ways** | never, at either end |
+| Zero-copy clone | **preserved** | not needed |
+
+§12 says *"a policy attached at the base travels every path."* The true
+statement is narrower: **a policy travels every path that reads the base at
+query time.** And §2's defining rule — promote from `LAB`, never reference —
+would have created the defect in two more places had it been implemented,
+because promotion means materialisation. It was never implemented, which is the
+only reason `SERVE.ORDER_RISK` filters correctly.
 
 ---
 
@@ -1657,6 +1742,16 @@ Part 13 extends `SERVE` outward — reader account, private listing, SQL API.
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |
+| `scripts/sqllint.sh` | The four mistakes this project keeps making. Run it before running SQL |
+| `sql/p13_probe*.sql` | Which outbound surfaces exist, established by attempting each |
+| `sql/p13_launder_diag*.sql` | Materialisation launders the row filter, measured by role |
+| `sql/p13_serve_harden.sql` | The second policy and the five secure views. 8 stores to 3 |
+| `sql/p13_share.sql` | The share, and the account-keyed pattern that makes it work |
+| `sql/deploy/` | Files written for `EXECUTE IMMEDIATE FROM`. No `USE` statements |
+| `sql/p14_git.sql`, `sql/p14_deploy.sql` | Git integration, the clone question, deploy from the repo |
+| `sql/p15_cost.sql` | What the whole thing cost, from four instruments |
+| `scripts/p13_sqlapi.sh` | The SQL API. Dry-run unless `RUN=1` |
+| `.github/workflows/ci.yml` | Lint with no secrets; dbt against a per-run clone with them |
 | `scripts/p7_cdc_sink.sh` | Second v4 sink for the CDC topics. `create` redacts the private key |
 | `scripts/p7_source_reset.sh` | Full `down -v` rebuild. Dry-run unless `RESET=1` |
 | `scripts/p7_mutate_source.sh` | Deterministic Postgres mutations. `APPLY=1` to run |

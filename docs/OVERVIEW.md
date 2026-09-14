@@ -4,10 +4,15 @@ Companion to `docs/ARCHITECTURE.md` (engineering detail) and `docs/PROGRESS.md`
 (build log). This document states what the platform is and what has been built.
 Technology is named generically, with the specific product in brackets.
 
-**Status: twelve of fifteen stages complete.** Ingestion (13 of 14 routes),
-cleaning, the business model, predictive scoring, text classification, the
-application layer and governance are all built and verified. Outbound sharing,
-CI/CD and the closing cost report remain.
+**Status: all fifteen stages complete.** Ingestion (13 of 14 routes), cleaning,
+the business model, predictive scoring, text classification, the application
+layer, governance, outbound sharing, automated build and the closing cost report
+are all built and verified.
+
+**The whole thing cost 5.87 credits over eight days — 7.3% of its budget.**
+Three quarters of that was the platform waiting rather than working, half the
+measurable query cost was one screen, and the single biggest consumer was a
+cluster nobody in the project ever configured.
 
 ---
 
@@ -79,8 +84,11 @@ flowchart TD
     J -. "what people decide<br/>becomes data too" .-> D
 ```
 
-**Nothing leaves.** The models are trained inside the platform, the application
-runs inside it, and the data is never copied out to be processed somewhere else.
+**One thing now leaves, on purpose.** A published feed carries daily delivery
+performance by store to whoever is entitled to it, and which rows each recipient
+sees is decided by who is asking. Everything else stays: the models are trained
+inside the platform, the application runs inside it, and no data is copied out to
+be processed elsewhere.
 Personal details are protected where they are stored rather than in each place
 they are read, so a query written next year is covered by a rule written today.
 
@@ -425,7 +433,15 @@ weeks apart, each correct alone.
 | `QC_ADMIN` | Owns the database |
 | `QC_LOADER` | Writes `LAND` and `RAW` only |
 | `QC_ENGINEER` | Full access to transformation and lab schemas |
-| `QC_ANALYST` | `SERVE` and `SEMANTIC` views only. No base-table access anywhere |
+| `QC_ANALYST` | The published views, plus **direct read access to two tables in the business model** |
+
+> **Corrected 2026-09-14.** This row read *"`SERVE` and `SEMANTIC` views only.
+> No base-table access anywhere"* from the day the access model was written
+> until Part 13 listed the grants. The analyst role holds read access directly
+> on the order fact and the customer dimension. Those tables carry the column
+> and row rules and the protection was verified by signing in, so nothing was
+> exposed — but the access statement was wrong, and a reader would have drawn
+> the wrong conclusion about how much surface there is to protect.
 
 Two service accounts, both typed as service accounts and both **key-pair
 authentication only**. No password exists in any file or configuration. Private
@@ -592,10 +608,11 @@ training procedure.
 | **Application layer** | **Complete** |
 | **Governance** | **Complete** — 11 of 11 controls built and verified |
 | Scheduling and orchestration | **Designed, never built.** The platform owns no scheduled jobs at all. Every stage was run by hand, so the absence produced no symptom and went unnoticed for five stages |
+| **Outbound sharing** | **Complete** — a governed share whose rows are filtered by which consumer is asking |
+| **Automated build and release** | **Complete** — the platform reads this repository directly and deploys from it |
+| **Closing cost report** | **Complete** |
 | Forecasting | Not started |
-| Outbound sharing | Not started |
-| Automated build and release | Not started |
-| Closing cost report | Not started |
+| Serving to a consumer account | Skipped deliberately. The capability worth showing is the share, not the customer who reads it |
 
 ---
 

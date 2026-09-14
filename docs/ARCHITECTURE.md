@@ -16,11 +16,19 @@ An operator runs 8 dark stores. 20,000 orders over 60 days, each carrying a
 object in this document exists to find those orders before the customer does,
 and to make the resulting analysis both trustworthy and cheap to run.
 
-**Status on 2026-09-14: twelve of fifteen stages built and verified.** Ingestion
-(13 of 14 routes), conformance, the dimensional model, two models, the
-application layer and governance are done. Outbound sharing, CI/CD and the
-closing cost report are not. Orchestration (§7) is design only — it was never
-built and nothing noticed, because every stage was driven by hand.
+**Status on 2026-09-14: fifteen of fifteen stages built and verified.**
+Ingestion (13 of 14 routes), conformance, the dimensional model, two models, the
+application layer, governance, outbound sharing, CI/CD and the closing cost
+report are all done and measured. Two things are deliberately absent rather than
+missing: orchestration (§7) was never built and nothing noticed because every
+stage was driven by hand, and no reader account was created because the
+capability worth demonstrating is the share, not the consumer.
+
+**The whole build cost 5.869 credits over eight days — 7.3% of the budget.**
+Half the attributed query spend was one Streamlit console, 79.9% of warehouse
+spend was idle rather than execution, and the largest single consumer was a
+vendor-default warehouse nobody configured. All three run against the advice
+usually given, and none of them is visible in any one instrument.
 
 One database, `QCOMMERCE`. Nine schemas, and the schema an object lives in *is*
 the statement of who may read it — that is the whole access design, not a naming
@@ -1181,6 +1189,136 @@ corrupted the parse. It reported clean and dirty on correct files alike. Nine re
 this account do X — and was not probing *signatures*. The discipline needs
 extending to the exact call rather than the family it belongs to.
 
+### Outbound as built — Part 13
+
+Four surfaces designed, three built, one skipped by choice.
+
+| Surface | State |
+|---|---|
+| **Share** | `SHR_QC_ANALYTICS` carrying one secure view. Built and verified |
+| **Listing** | `CREATE EXTERNAL LISTING` parses, resolves the share, reaches manifest validation. Blocked only by a provider profile created in Snowsight |
+| **SQL API** | `scripts/p13_sqlapi.sh`. `SVC_CI` is `TYPE = SERVICE` with a key pair |
+| **Reader account** | **Skipped deliberately**, not gated. `CREATE MANAGED ACCOUNT` spawns a billable child account and was judged not worth it — the capability being demonstrated is the share, not the consumer |
+
+**Part 13 set out to probe four surfaces and found five defects.** Three about
+sharing, two that predate any outbound work:
+
+| # | Defect | Outcome |
+|---|---|---|
+| 1 | Materialisation launders the row filter | **fixed** — see below |
+| 2 | `QC_ANALYST` holds `SELECT` on `MART` base tables | docs corrected |
+| 3 | Five of six `SERVE` views were not secure | **fixed** — `ALTER VIEW … SET SECURE`, grants preserved |
+| 4 | `SERVE` references `LAB`, `CORE` and `RAW` directly | recorded, not fixed |
+| 5 | A share accepts a policy-protected table, and a non-secure view once `SECURE_OBJECTS_ONLY = FALSE` | a property of sharing, not a defect |
+
+**Defect 1, measured by assuming the role.** `SERVE.SLA_STORE_HOUR_AGG` is a
+dynamic table refreshed under `ACCOUNTADMIN`. `RAP_STORE` filters
+`MART.FCT_ORDER` and cannot filter rows already written down.
+
+| | `STORES_VIA_AGGREGATE` | `STORES_VIA_VIEW` |
+|---|---|---|
+| Before / `QC_ANALYST` | **8** | 3 |
+| After / `QC_ANALYST` | **3** | 3 |
+
+The app's Operations screen had shown every analyst all eight stores since Part
+11, through a fact table Part 12 certified as row-filtered and verified by
+signing in. Fixed with `GOV.RAP_STORE_CODE` — **a second policy, because a
+policy does not follow a key change**: `RAP_STORE` takes `store_sk` and
+translates through `DIM_STORE`, and the aggregate groups by `STORE_CODE` and
+carries no surrogate key. One policy per protected concept is the wrong unit;
+one per concept **per key** is closer.
+
+**Defect 5, and the share pattern it forced.** `RAP_STORE_CODE` filters on
+`CURRENT_ROLE()`, and a consumer account has no `QC_ANALYST` — so after the
+hardening every path from the fact returns **zero** rows to a consumer, where
+before it returned all eight stores. The failure moved from silently too much to
+silently nothing, and neither end raises an error.
+
+**A policy written in terms of roles cannot cross an account boundary.** So
+`SERVE.SHR_SLA_DAILY` is a **table**, built by the role the role-policy exempts,
+carrying only `GOV.RAP_SHARE_ACCOUNT` keyed on `CURRENT_ACCOUNT()`. That is
+precisely the laundering that is defect 1. **The same mechanism is a defect
+internally and the mechanism externally** — what changes is whether anything
+re-applies protection afterwards. Verified in three states:
+
+| | Rows | Stores |
+|---|---:|---:|
+| No entitlement | 0 | 0 |
+| This account entitled to 2 stores | 120 | 2 |
+| Entitlement withdrawn | 0 | 0 |
+
+**A fail-closed policy makes its own table useless as a source for the
+entitlement data that would open it.** The first run inserted zero rows because
+the seeding statement read the store codes from the table it was entitling.
+Seeded from `MART.DIM_STORE` instead, which carries no policy. Not specific to
+sharing: any fail-closed control configured from the thing it controls has this,
+and the fix is always to seed from outside the policy's reach.
+
+### CI/CD as built — Part 14
+
+| Piece | State |
+|---|---|
+| Git repository stage | `LAND.GIT_QCOMMERCE` via `GIT_API_QCOMMERCE`. **Not gated** |
+| `EXECUTE IMMEDIATE FROM` | Works — on files written to the contract |
+| Zero-copy clone | Verified to carry the row access policy |
+| GitHub Actions | `.github/workflows/ci.yml`, two jobs |
+
+**A `git_https_api` integration is permitted where an external access
+integration is refused.** §1 Finding 3 should not be read as covering both —
+they reach the same public internet and only one is gated.
+
+**Every SQL file in this repository is undeployable, and that is the finding.**
+
+```
+090236: Unsupported statement type 'USE'
+        at sql/p13_probe.sql line 48
+```
+
+`EXECUTE IMMEDIATE FROM` runs a file as a Snowflake Scripting block, where
+`USE ROLE`, `USE WAREHOUSE` and `USE DATABASE` do not exist — and all 55 files
+open with four of them. **That is the real constraint CI/CD imposes on a SQL
+codebase and it is not the one anybody plans for.** Rewriting 55 files to suit a
+deploy mechanism would be the tail wagging the dog; `sql/deploy/` holds files
+written to the narrower contract instead — fully qualified names, context
+inherited from the caller, nothing assuming an interactive session.
+
+**The CI lint job is the one that earns its place.** It needs no secrets and no
+Snowflake connection, and `scripts/sqllint.sh` catches the four mistakes that
+have actually cost this project round trips: reserved words as column aliases
+(`ROWS`, `CHECK` — twice each), a literal `$$` inside a `$$`-quoted body, an
+unqualified `DROP` in a file that creates an application package, and a
+double-escaped newline in a procedure body. Run across the corpus it found three
+real defects in already-run Part 13 files. Every error Parts 12 and 13 paid for
+was a parse or naming mistake a machine can see.
+
+### The finding this project produced
+
+Four mechanisms derive an object from a protected one. **All four behave
+differently, and no single feature's documentation mentions the others.**
+
+| Derivation | What happens to the row filter | How you find out |
+|---|---|---|
+| **Materialised** (dynamic table) | **lost** — rows computed under the builder's visibility and written down | never, unless someone checks by role |
+| **Materialized view** | refused at `CREATE` | immediately |
+| **Share** | **accepted in both directions** — the protected table goes in, and the filter then evaluates to nothing in the consumer | never, at either end |
+| **Zero-copy clone** | **preserved** — verified by role, 3 stores on the clone and 3 on the original | not needed; it works |
+
+And a fifth behaviour that is not about derivation at all: **a fail-closed
+policy deadlocks its own configuration** when the entitlement data is read from
+the table the policy protects.
+
+§12 states the principle as *"a policy attached at the base travels every
+path."* The true statement is narrower and was measured rather than reasoned:
+
+> **A policy travels every path that reads the base at query time.**
+
+Everything else — materialisation, sharing, promotion — is a boundary the policy
+does not cross, and only cloning is safe by default. The architecture's own
+defining rule in §2 (*promote from `LAB` to `SERVE`, never reference*) would have
+**created** this defect in two more places had it been implemented, because
+promotion means materialisation. It was never implemented, which is the only
+reason `SERVE.ORDER_RISK` filters correctly today.
+
 ### Cost as measured — three instruments, three different totals
 
 The account budget's `GET_SPENDING_HISTORY` is the first instrument in this
@@ -1189,10 +1327,14 @@ two contradicted an assumption held since Part 3.
 
 | Instrument | Reports | Over |
 |---|---:|---|
-| Budget `GET_SPENDING_HISTORY` | **5.410417** | 8 days, all service types, 6.8% of the 80 limit |
-| `ACCOUNT_USAGE.METERING_DAILY_HISTORY` | 5.586925 | the same 8 days |
+| Budget `GET_SPENDING_HISTORY` | **5.869094** | 8 days, all service types, **7.3% of the 80 limit** |
+| `ACCOUNT_USAGE.METERING_DAILY_HISTORY` | 5.586925 | the same 8 days, earlier in the day |
 | `RM_POC.used_credits` | 2.55 | warehouse only, and only its own three warehouses, and only since it started |
-| `QUERY_ATTRIBUTION_HISTORY` | 0.3844 | tagged query execution only |
+| `QUERY_ATTRIBUTION_HISTORY` | 1.1574 | tagged query execution only |
+
+**Final, Part 15.** 5.850263 warehouse and 0.018831 serverless across eleven
+service types — **99.68% against 0.32%**. Storage is 47.8 MB active across all
+seven schemas and rounds to nothing at any price.
 
 **The budget and `ACCOUNT_USAGE` disagree by 0.192815 and the budget is right.**
 `CREDITS_ADJUSTMENT_CLOUD_SERVICES` is the exact negative of cloud services on
@@ -1203,13 +1345,13 @@ against the budget's 5.394110. **`CREDITS_USED` is not what you pay.**
 
 #### Where the credits actually went
 
-| Warehouse | Total | Monitored | Days |
-|---|---:|---|---:|
-| **`SNOWFLAKE_LEARNING_WH`** | **3.142465** | **no** | 7 |
-| `WH_TRANSFORM_XS` | 1.775760 | `RM_POC` | 5 |
-| `WH_APP_XS` | 0.708300 | `RM_POC` | 2 |
-| `WH_INGEST_XS` | 0.086368 | `RM_POC` | 6 |
-| `CLOUD_SERVICES_ONLY` | 0.001714 | — | 4 |
+| Warehouse | Total | Share | Origin | Days |
+|---|---:|---:|---|---:|
+| **`SNOWFLAKE_LEARNING_WH`** | **3.1432** | **52.3%** | vendor default | 7 |
+| `WH_TRANSFORM_XS` | 2.0290 | 33.8% | designed | 5 |
+| `WH_APP_XS` | 0.7474 | 12.4% | designed | 3 |
+| `WH_INGEST_XS` | 0.0864 | 1.4% | designed | 6 |
+| `CLOUD_SERVICES_ONLY` | 0.0017 | 0.0% | vendor default | 4 |
 
 **A Snowflake-provided default warehouse is the single biggest consumer on this
 account** — 55.0% of all warehouse spend, on more days than any warehouse this
@@ -1225,13 +1367,40 @@ against 2.55 reported. It was never wrong, only narrower than anyone read it as.
 
 #### Three findings that only appear when the instruments are read together
 
-**Idle time is the cost story, not compute.** 0.3844 attributed against 5.3941
-metered — **93% of warehouse spend is not attributed query execution.** An XS
+**Idle time is the cost story, not compute.** 1.1574 attributed against 5.7688
+metered — **79.9% of warehouse spend is not attributed query execution.** An XS
 warehouse bills 1 credit/hour and `AUTO_SUSPEND` is 60 seconds, so every
 isolated statement in an interactive session buys a minute of billed time plus
 resume for a few seconds of work, hundreds of times over. **At this scale
 batching statements matters far more than warehouse size**, which is the
 opposite of the usual advice.
+
+> **Corrected 2026-09-14, after Part 15.** This read *93%* from 0.3844
+> attributed, which was a partial `ACCOUNT_USAGE` read taken while attribution
+> was still catching up. The full figure is 1.1574 and the share is 79.9%. The
+> conclusion does not change; the number was overstated by thirteen points and
+> is the second time today that a figure taken before `ACCOUNT_USAGE` settled
+> had to be revised.
+
+**The application is half the attributed spend, from 36 queries.** Per-part
+attribution, Part 15:
+
+| Part | Queries | Credits | Share | Per query |
+|---|---:|---:|---:|---:|
+| **the Streamlit console** | **36** | **0.5867** | **50.7%** | **0.0163** |
+| p12 governance | 146 | 0.1456 | 12.6% | 0.0010 |
+| p09 the model | 84 | 0.1335 | 11.5% | 0.0016 |
+| *(untagged)* | 222 | 0.0841 | 7.3% | 0.0004 |
+| p06 ingestion | 171 | 0.0659 | 5.7% | 0.0004 |
+| p10 text | 112 | 0.0595 | 5.1% | 0.0005 |
+
+**Sixteen times the cost per query of anything else.** A console opened briefly
+for a demo outspent the model training and the entire governance build combined.
+An open app tab holds its warehouse warm and re-queries on every tab switch, so
+the cost is wall-clock presence rather than work done — the same mechanism as
+the idle finding above, concentrated in one object. The tag is Streamlit's own
+JSON blob rather than this project's `part:component` convention, which is why
+it sorts oddly.
 
 **Serverless was structurally right to worry about and numerically irrelevant.**
 0.016307 credits over eight days, 0.30% of the total. `PIPE` totals 0.000113
@@ -1292,9 +1461,21 @@ default, it did bill as serverless, and setting
   could be classified by an LLM and scored against `OPS.COMPLAINT_TRUTH` for
   roughly 0.05 credits. The TF-IDF classifier scores 5.41% on genuinely novel
   phrasings; an LLM does not share that failure mode. Not run.
-- **Parts 13 through 15.** Outbound serving — reader account, private listing,
-  SQL API (13), CI/CD (14), the cost model closed out against measured
-  credits (15). Parts 10, 11 and 12 are built.
+- ~~**Parts 13 through 15**~~ **DONE.** Outbound sharing, CI/CD and the cost
+  model are built and measured. See the as-built sections above.
+- **A provider profile for the listing.** `CREATE EXTERNAL LISTING` parses,
+  resolves the share and reaches manifest validation; publication needs a
+  profile created in Snowsight and marketplace metadata. A UI step, not a gate.
+- **`SERVE` still references `LAB`, `CORE` and `RAW` directly** (Part 13, defect
+  4). §2's defining rule — promote from `LAB`, never reference — is not
+  implemented, and implementing it now would materialise those rows and
+  recreate defect 1 in two more places. **It needs the account-keyed pattern
+  from Part 13 applied to every promoted object, not a straight dbt port.**
+- **`OPS.DQ_RESULTS.OBSERVED` is `NUMBER` with no scale**, so it is
+  `NUMBER(38,0)` and every fractional check value in this project has been
+  silently rounded to an integer since Part 3. `project_within_budget` recorded
+  `6` for 5.869. Most checks store counts so it rarely mattered, but any check
+  that recorded a rate lost it.
 
 ---
 
