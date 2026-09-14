@@ -191,13 +191,19 @@ def run(session):
         attempt("listing share: secure view",
                 "GRANT SELECT ON VIEW QCOMMERCE.SERVE.V_CUSTOMER TO SHARE " + SECURE_SHARE)
 
-        manifest = (
-            "title: QCOMMERCE probe listing\\n"
-            "subtitle: capability probe, not for publication\\n"
-            "description: Created by sql/p13_probe2.sql to establish whether "
-            "this account can define a listing at all. Dropped in the same call.\\n"
-            "listing_terms:\\n  type: OFFLINE\\n"
-        )
+        # chr(10), not an escape: a backslash-n written here survives the
+        # heredoc and the Python literal as two characters, so the manifest
+        # arrives as one line and YAML stops at the second colon. That is
+        # exactly what happened on the first run.
+        nl = chr(10)
+        manifest = nl.join([
+            "title: QCOMMERCE probe listing",
+            "subtitle: capability probe, not for publication",
+            "description: Created by sql/p13_probe2.sql to establish whether",
+            "  this account can define a listing at all. Dropped in the same call.",
+            "listing_terms:",
+            "  type: OFFLINE",
+        ])
         attempt(
             "create listing, correct delimiter",
             "CREATE EXTERNAL LISTING TMP_P13_PROBE_LISTING SHARE " + SECURE_SHARE

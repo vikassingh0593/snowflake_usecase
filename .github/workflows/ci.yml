@@ -1,0 +1,160 @@
+name: ci
+
+# Two jobs, and only one of them needs an account.
+#
+# lint runs on every push and pull request with no secrets and no Snowflake
+# connection at all. It is the job that will actually catch things, because
+# every error this project has paid for in Part 12 and Part 13 was a parse or
+# naming mistake that a machine can see: a reserved word used as a column alias,
+# a dollar pair inside a dollar-quoted body, an unqualified DROP after an
+# application package, a double-escaped newline, a Python procedure body that
+# does not compile.
+#
+# warehouse runs dbt against a zero-copy clone and needs three secrets. It is
+# skipped rather than failed when they are absent, so a fork or a fresh clone
+# gets the useful half without configuration.
+#
+#   SNOWFLAKE_ACCOUNT       OOB49311
+#   SNOWFLAKE_USER          SVC_CI
+#   SNOWFLAKE_PRIVATE_KEY   contents of the SVC_CI .p8, unencrypted
+#
+# SVC_CI is TYPE = SERVICE and key-pair only, so it cannot be used to log in
+# interactively even if the secret leaks. No password exists to add here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SQL conventions
+        run: ./scripts/sqllint.sh
+
+      - name: Python inside stored procedures compiles
+        run: |
+          python3 - <<'PY'
+          import ast, glob, sys
+          bad = 0
+          for path in sorted(glob.glob("sql/*.sql")):
+              parts = open(path).read().split("$$")
+              # A procedure body is every odd-indexed segment between $$ pairs.
+              for i in range(1, len(parts), 2):
+                  body = parts[i]
+                  if "def " not in body:
+                      continue
+                  try:
+                      ast.parse(body)
+                  except SyntaxError as e:
+                      print(f"{path}: line {e.lineno}: {e.msg}")
+                      bad += 1
+          print("ok" if not bad else f"{bad} procedure body/bodies failed to parse")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Streamlit app compiles
+        run: python3 -m py_compile streamlit/app.py
+
+      - name: Shell scripts parse
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+
+      - name: Nothing secret is committed
+        run: |
+          if git ls-files | grep -E '(^|/)(rsa_key|.*\.p8$|\.env$)'; then
+            echo "a key or env file is tracked"; exit 1
+          fi
+          echo "ok"
+
+  warehouse:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Are the secrets present
+        id: gate
+        env:
+          ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+        run: |
+          if [ -z "$ACCOUNT" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "no SNOWFLAKE_ACCOUNT secret. Skipping the warehouse job."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dbt
+        if: steps.gate.outputs.configured == 'true'
+        run: pip install --quiet dbt-core==1.12.4 dbt-snowflake==1.12.0
+
+      - name: Write the key
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.dbt
+          printf '%s' "$PRIVATE_KEY" > ~/svc_ci.p8
+          chmod 600 ~/svc_ci.p8
+
+      # A clone is free and instant. Building on it means a pull request never
+      # touches MART, and the clone is named for the run so two pull requests
+      # cannot collide.
+      - name: Clone MART for this run
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          USER_NAME: ${{ secrets.SNOWFLAKE_USER }}
+        run: |
+          pip install --quiet snowflake-connector-python
+          python3 - <<PY
+          import os, snowflake.connector
+          from cryptography.hazmat.primitives import serialization
+          key = serialization.load_pem_private_key(open(os.path.expanduser("~/svc_ci.p8"), "rb").read(), password=None)
+          conn = snowflake.connector.connect(
+              account=os.environ["ACCOUNT"], user=os.environ["USER_NAME"],
+              private_key=key.private_bytes(
+                  encoding=serialization.Encoding.DER,
+                  format=serialization.PrivateFormat.PKCS8,
+                  encryption_algorithm=serialization.NoEncryption()),
+              role="QC_ENGINEER", warehouse="WH_TRANSFORM_XS", database="QCOMMERCE",
+          )
+          conn.cursor().execute("CREATE OR REPLACE SCHEMA MART_CI_${{ github.run_id }} CLONE MART")
+          print("cloned")
+          PY
+
+      - name: dbt build against the clone
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          DBT_TARGET_SCHEMA: MART_CI_${{ github.run_id }}
+        run: dbt build --project-dir dbt --profiles-dir dbt --target ci
+
+      # always(), so a failed build still drops the clone. A clone costs nothing
+      # until the source diverges, but it is a copy of the fact table and the
+      # project spent Part 13 learning what derived copies do to protection.
+      - name: Drop the clone
+        if: always() && steps.gate.outputs.configured == 'true'
+        env:
+          ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          USER_NAME: ${{ secrets.SNOWFLAKE_USER }}
+        run: |
+          python3 - <<PY
+          import os, snowflake.connector
+          from cryptography.hazmat.primitives import serialization
+          key = serialization.load_pem_private_key(open(os.path.expanduser("~/svc_ci.p8"), "rb").read(), password=None)
+          conn = snowflake.connector.connect(
+              account=os.environ["ACCOUNT"], user=os.environ["USER_NAME"],
+              private_key=key.private_bytes(
+                  encoding=serialization.Encoding.DER,
+                  format=serialization.PrivateFormat.PKCS8,
+                  encryption_algorithm=serialization.NoEncryption()),
+              role="QC_ENGINEER", warehouse="WH_TRANSFORM_XS", database="QCOMMERCE",
+          )
+          conn.cursor().execute("DROP SCHEMA IF EXISTS MART_CI_${{ github.run_id }}")
+          print("dropped")
+          PY
