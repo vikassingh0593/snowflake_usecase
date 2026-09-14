@@ -40,3 +40,11 @@ source/out/
 
 # Kafka connector jar — 170 MB, fetched by scripts/p3_connector.sh
 source/connectors/plugins/**/*.jar
+
+# Public keys. Not secret, but not repo content either: every reference in this
+# repo regenerates them from the .p8, and the .p8 is ignored above.
+#   openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
+*.pub
+
+# dbt's per-machine anonymous-usage id
+dbt/.user.yml
