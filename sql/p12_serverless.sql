@@ -24,6 +24,14 @@ USE WAREHOUSE WH_TRANSFORM_XS;
 ALTER SESSION SET QUERY_TAG = 'p12:serverless';
 USE DATABASE QCOMMERCE;
 
+-- ANY before-and-after in Snowflake has to turn this off first. The first
+-- version of this file did not, and the baseline came back with
+-- BYTES_SCANNED 0, EXECUTION_TIME 1 ms and a single operator reading
+-- QUERY RESULT REUSE -- the query had been run in an earlier attempt, so the
+-- result was served from cache and never executed. The comparison was a cache
+-- hit against a real scan, which is not a comparison.
+ALTER SESSION SET USE_CACHED_RESULT = FALSE;
+
 -- =============================================================================
 -- STEP 1 — how many partitions are there to skip.
 --
@@ -128,16 +136,33 @@ FROM   TABLE(GET_QUERY_OPERATOR_STATS($after_id));
 ALTER TABLE MART.FCT_ORDER DROP SEARCH OPTIMIZATION;
 
 -- =============================================================================
--- STEP 4 — the materialized view, and the restriction that decides it.
+-- STEP 4 — the materialized view, and the two restrictions that decide it.
 --
--- SERVE.SLA_STORE_HOUR_AGG joins MART.FCT_ORDER to MART.DIM_STORE. A
--- materialized view CANNOT DO THAT -- no joins, no HAVING, no window
--- functions, one table only. So the comparison is not "which is faster" but
--- "only one of them can express the aggregate at all", which is a shorter
--- conversation and a more useful one.
+-- The first was expected. SERVE.SLA_STORE_HOUR_AGG joins MART.FCT_ORDER to
+-- MART.DIM_STORE and a materialized view cannot contain a join:
 --
--- The illegal version is attempted inside a procedure so the error is recorded
--- rather than aborting the file.
+--   002212 (42601): Invalid materialized view definition. More than one table
+--   referenced in the view definition
+--
+-- The second was not, and it is the more interesting one:
+--
+--   000002 (0A000): Unsupported feature 'Create Materialized view on entity
+--   protected by row access policy'.
+--
+-- THE ROW ACCESS POLICY THIS PART ATTACHED IN STEP 3 OF p12_policies.sql MAKES
+-- MATERIALIZED VIEWS ON MART.FCT_ORDER IMPOSSIBLE. Not slower, not partially
+-- maintained -- refused outright. A governance control and a performance
+-- feature that are documented pages apart turn out to be mutually exclusive on
+-- the same table, and neither one's documentation is where you find that out.
+--
+-- It only surfaced because both were built. Either alone looks fine, and a
+-- design that reviewed them separately would have shipped a plan containing
+-- both.
+--
+-- So the legal MV moves to MART.FCT_ORDER_ITEM, which carries no row access
+-- policy. Both refusals are attempted inside a procedure so they are recorded
+-- rather than aborting the file -- which is how the second one was found, by
+-- a file that aborted.
 -- =============================================================================
 CREATE OR REPLACE PROCEDURE LAB.TMP_MV_PROBE()
 RETURNS STRING
@@ -148,60 +173,75 @@ HANDLER = 'run'
 AS
 '
 def run(session):
-    stmt = """CREATE OR REPLACE MATERIALIZED VIEW LAB.TMP_MV_JOINED AS
+    attempts = [
+        ("joined, two tables", """CREATE OR REPLACE MATERIALIZED VIEW LAB.TMP_MV_JOINED AS
               SELECT s.STORE_CODE, COUNT(*) AS ORDERS
               FROM   MART.FCT_ORDER o
               JOIN   MART.DIM_STORE s ON s.STORE_SK = o.STORE_SK
-              GROUP  BY s.STORE_CODE"""
-    try:
-        session.sql(stmt).collect()
-        session.sql("DROP MATERIALIZED VIEW IF EXISTS LAB.TMP_MV_JOINED").collect()
-        return "a joined materialized view was ACCEPTED, which contradicts the docs"
-    except Exception as exc:
-        return "joined MV refused: %s" % str(exc).replace(chr(10), " ")[:260]
+              GROUP  BY s.STORE_CODE"""),
+        ("single table, but row-access protected", """CREATE OR REPLACE MATERIALIZED VIEW LAB.TMP_MV_RAP AS
+              SELECT STORE_SK, COUNT(*) AS ORDERS
+              FROM   MART.FCT_ORDER
+              GROUP  BY STORE_SK"""),
+    ]
+    out = []
+    for label, stmt in attempts:
+        try:
+            session.sql(stmt).collect()
+            out.append("%s: ACCEPTED" % label)
+        except Exception as exc:
+            out.append("%s: refused -- %s"
+                       % (label, str(exc).replace(chr(10), " ")[:200]))
+        finally:
+            for v in ("LAB.TMP_MV_JOINED", "LAB.TMP_MV_RAP"):
+                try:
+                    session.sql("DROP MATERIALIZED VIEW IF EXISTS " + v).collect()
+                except Exception:
+                    pass
+    return " || ".join(out)
 ';
 
 CALL LAB.TMP_MV_PROBE();
 DROP PROCEDURE IF EXISTS LAB.TMP_MV_PROBE();
 
--- The legal version: one table, no join, so the store surrogate key rather
--- than the store code. Which means anything reading it still has to join to
--- get a name -- the join did not disappear, it moved to every reader.
-CREATE OR REPLACE MATERIALIZED VIEW LAB.MV_ORDERS_BY_STORE AS
-SELECT STORE_SK,
-       COUNT(*)                        AS ORDERS,
-       SUM(IFF(IS_BREACHED, 1, 0))     AS BREACHED,
-       SUM(ORDER_TOTAL_PAISE)          AS GROSS_PAISE
-FROM   MART.FCT_ORDER
-WHERE  STATUS = 'DELIVERED'
-GROUP  BY STORE_SK;
+-- The legal version, on FCT_ORDER_ITEM because FCT_ORDER is off limits. One
+-- table, no join, grouped on the product id -- so anything wanting a product
+-- name still has to join. The join did not disappear, it moved to every
+-- reader.
+CREATE OR REPLACE MATERIALIZED VIEW LAB.MV_LINES_BY_PRODUCT AS
+SELECT PRODUCT_ID,
+       COUNT(*)                        AS LINES_,
+       SUM(QTY)                        AS UNITS,
+       SUM(LINE_TOTAL_PAISE)           AS GROSS_PAISE
+FROM   MART.FCT_ORDER_ITEM
+GROUP  BY PRODUCT_ID;
 
 SHOW MATERIALIZED VIEWS IN SCHEMA LAB;
 SELECT "name", "rows", "bytes", "refreshed_on", "behind_by", "invalid_reason"
 FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 
-SELECT 'materialized view' AS source, STORE_SK, ORDERS, BREACHED
-FROM   LAB.MV_ORDERS_BY_STORE ORDER BY ORDERS DESC LIMIT 3;
+SELECT 'materialized view' AS source, PRODUCT_ID, LINES_, UNITS
+FROM   LAB.MV_LINES_BY_PRODUCT ORDER BY LINES_ DESC LIMIT 3;
 
-SELECT 'dynamic table' AS source, STORE_CODE, SUM(ORDERS) AS ORDERS,
-       SUM(BREACHED) AS BREACHED
-FROM   SERVE.SLA_STORE_HOUR_AGG GROUP BY STORE_CODE ORDER BY ORDERS DESC LIMIT 3;
+SELECT 'straight aggregate' AS source, PRODUCT_ID, COUNT(*) AS LINES_,
+       SUM(QTY) AS UNITS
+FROM   MART.FCT_ORDER_ITEM GROUP BY PRODUCT_ID ORDER BY LINES_ DESC LIMIT 3;
 
 -- =============================================================================
 -- STEP 5 — checks, taken while both structures still exist.
 -- =============================================================================
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
-SELECT 'materialized_view_agrees_with_the_dynamic_table', 'LAB.MV_ORDERS_BY_STORE',
-       (SELECT SUM(ORDERS) FROM LAB.MV_ORDERS_BY_STORE)
-         = (SELECT SUM(ORDERS) FROM SERVE.SLA_STORE_HOUR_AGG)
-       AND (SELECT SUM(BREACHED) FROM LAB.MV_ORDERS_BY_STORE)
-         = (SELECT SUM(BREACHED) FROM SERVE.SLA_STORE_HOUR_AGG),
-       (SELECT SUM(ORDERS) FROM LAB.MV_ORDERS_BY_STORE),
-       'two maintained aggregates over the same fact table agree. If they '
-         || 'disagree one of them is stale, and finding out which is the whole '
-         || 'maintenance burden these objects carry',
-       OBJECT_CONSTRUCT('mv',      (SELECT SUM(ORDERS) FROM LAB.MV_ORDERS_BY_STORE),
-                        'dynamic', (SELECT SUM(ORDERS) FROM SERVE.SLA_STORE_HOUR_AGG));
+SELECT 'materialized_view_agrees_with_the_source', 'LAB.MV_LINES_BY_PRODUCT',
+       (SELECT SUM(LINES_) FROM LAB.MV_LINES_BY_PRODUCT)
+         = (SELECT COUNT(*) FROM MART.FCT_ORDER_ITEM)
+       AND (SELECT SUM(UNITS) FROM LAB.MV_LINES_BY_PRODUCT)
+         = (SELECT SUM(QTY) FROM MART.FCT_ORDER_ITEM),
+       (SELECT SUM(LINES_) FROM LAB.MV_LINES_BY_PRODUCT),
+       'the maintained aggregate agrees with the table it aggregates. If it '
+         || 'does not, it is stale, and noticing that is the maintenance '
+         || 'burden these objects carry',
+       OBJECT_CONSTRUCT('mv',     (SELECT SUM(LINES_) FROM LAB.MV_LINES_BY_PRODUCT),
+                        'source', (SELECT COUNT(*) FROM MART.FCT_ORDER_ITEM));
 
 -- =============================================================================
 -- STEP 6 — DROP THE MATERIALIZED VIEW.
@@ -212,7 +252,7 @@ SELECT 'materialized_view_agrees_with_the_dynamic_table', 'LAB.MV_ORDERS_BY_STOR
 -- credit report because it is serverless, and discovered when the balance runs
 -- out rather than when it is created.
 -- =============================================================================
-DROP MATERIALIZED VIEW IF EXISTS LAB.MV_ORDERS_BY_STORE;
+DROP MATERIALIZED VIEW IF EXISTS LAB.MV_LINES_BY_PRODUCT;
 
 SHOW MATERIALIZED VIEWS IN SCHEMA LAB;
 SHOW TABLES LIKE 'FCT_ORDER' IN SCHEMA MART;
@@ -222,7 +262,7 @@ FROM   TABLE(RESULT_SCAN(LAST_QUERY_ID()));
 INSERT INTO OPS.DQ_RESULTS (CHECK_NAME, TARGET, PASSED, OBSERVED, EXPECTED, DETAIL)
 SELECT 'nothing_serverless_survives_this_file', 'QCOMMERCE',
        (SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS
-         WHERE TABLE_SCHEMA = 'LAB' AND TABLE_NAME = 'MV_ORDERS_BY_STORE') = 0,
+         WHERE TABLE_SCHEMA = 'LAB' AND TABLE_NAME = 'MV_LINES_BY_PRODUCT') = 0,
        (SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = 'LAB'),
        'the materialized view is gone and the search optimization is dropped. '
          || 'Observed is the number of views left in LAB, which should not '
@@ -231,6 +271,6 @@ SELECT 'nothing_serverless_survives_this_file', 'QCOMMERCE',
 
 SELECT CHECK_NAME, PASSED, OBSERVED, EXPECTED
 FROM   OPS.DQ_RESULTS
-WHERE  TARGET IN ('LAB.MV_ORDERS_BY_STORE', 'QCOMMERCE')
+WHERE  TARGET IN ('LAB.MV_LINES_BY_PRODUCT', 'QCOMMERCE')
 ORDER  BY CHECK_TS DESC
 LIMIT  3;
