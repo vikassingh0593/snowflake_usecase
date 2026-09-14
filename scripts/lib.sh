@@ -71,6 +71,31 @@ except Exception:
     print("")'
 }
 
+# SHOW returns forty-odd columns and the box it draws in an 80-column terminal is
+# unreadable -- SHOW WAREHOUSES came back as blank cells. Everything worth
+# knowing from a SHOW here is the name column, so re-read the result set and
+# project it. RESULT_SCAN needs the SHOW in the same session, hence one -q.
+#
+#   snow_names "SHOW WAREHOUSES LIKE 'WH_%'" ["<extra WHERE predicate>"]
+snow_names() {
+    local show="$1" where="${2:-}"
+    local q="$show; SELECT \"name\" FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))"
+    [ -n "$where" ] && q="$q WHERE $where"
+    snow sql -c "$CONN" -q "$q" --format json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("?"); raise SystemExit
+# A multi-statement run returns one result set per statement; a single
+# statement returns the rows directly. Accept either rather than guess.
+if d and isinstance(d[0], list):
+    d = d[-1]
+names = [str(r.get("name", r.get("NAME", ""))) for r in d if isinstance(r, dict)]
+names = [n for n in names if n]
+print(", ".join(names) if names else "-")'
+}
+
 # --- the destructive gate ----------------------------------------------------
 # One spelling, everywhere. FORCE=1 skips it for CI; nothing else does.
 confirm() {
