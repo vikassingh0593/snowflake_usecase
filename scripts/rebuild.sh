@@ -262,17 +262,43 @@ cmd_plan() {
 cmd_status() {
     need_cmd snow
     step "account state — SHOW only, no warehouse resumes, no credits"
-    snow_q "
-SHOW DATABASES LIKE 'QC%';
-SHOW WAREHOUSES LIKE 'WH_%';
-SHOW ROLES LIKE 'QC_%';
-SHOW USERS LIKE 'SVC_%';
-SHOW RESOURCE MONITORS;
-SHOW SHARES LIKE '%QC%';
-SHOW EXTERNAL VOLUMES;
-SHOW INTEGRATIONS;
-"
-    note "an empty result for all eight means teardown was complete"
+
+    # name, SHOW, and a predicate that drops objects this project did not create.
+    # SHOW INTEGRATIONS always returns SNOWFLAKE$LOCAL_APPLICATION, and reporting
+    # a vendor default as project residue would make a clean account look dirty.
+    local rows=(
+      "database|SHOW DATABASES LIKE 'QC%'|"
+      "warehouse|SHOW WAREHOUSES LIKE 'WH_%'|"
+      "role|SHOW ROLES LIKE 'QC_%'|"
+      "user|SHOW USERS LIKE 'SVC_%'|"
+      "resource monitor|SHOW RESOURCE MONITORS|\"name\" LIKE 'RM_%'"
+      "share|SHOW SHARES LIKE '%QC%'|"
+      "external volume|SHOW EXTERNAL VOLUMES|"
+      "integration|SHOW INTEGRATIONS|\"name\" NOT LIKE 'SNOWFLAKE\$%'"
+    )
+    local label show where clean=1
+    for row in "${rows[@]}"; do
+        IFS='|' read -r label show where <<<"$row"
+        local found; found="$(snow_names "$show" "$where")"
+        [ "$found" = "-" ] || clean=0
+        printf '    %-17s %s\n' "$label" "$found"
+    done
+
+    if [ "$clean" = 1 ]; then
+        ok "nothing left — teardown was complete"
+    else
+        note "a dash means gone; anything else is still there"
+    fi
+
+    # Not this project's object, and by a wide margin the most expensive thing in
+    # the account: 3.1433 credits over seven days, 51.4% of every warehouse
+    # credit spent, against 2.9695 for all three WH_* warehouses together. It is
+    # the trial account's default, so any Snowsight worksheet that does not name
+    # a warehouse resumes it, and RM_POC is level = WAREHOUSE and never saw it.
+    # That gap is exactly the one Part 12 went looking for: RM_POC read 3.02.
+    step "the warehouse this project did not create"
+    printf '    %-17s %s\n' "vendor default" "$(snow_names "SHOW WAREHOUSES LIKE 'SNOWFLAKE_%'")"
+    note "sql/teardown.sql sets its AUTO_SUSPEND to 60; it does not drop it"
 }
 
 cmd_teardown() {

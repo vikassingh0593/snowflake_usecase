@@ -32,6 +32,7 @@
 --     object — deactivate it in Snowsight, do not look for a DROP.
 --   * ACCOUNT_USAGE history. Credit and query history outlive the objects, which
 --     is what makes sql/p15_cost.sql still readable after this file runs.
+--   * SNOWFLAKE_LEARNING_WH. Section 9 suspends it and explains why.
 --   * The Azure storage account, its containers and the Event Grid queue.
 --     Those are Azure resources; scripts/rebuild.sh prints the az commands and
 --     will not run them.
@@ -145,9 +146,37 @@ DROP RESOURCE MONITOR IF EXISTS RM_POC;
 DROP RESOURCE MONITOR IF EXISTS RM_ACCOUNT;
 
 -- -----------------------------------------------------------------------------
--- 9. Verify
+-- 9. The warehouse this project did not create, and did not drop
 --
--- Every one of these should come back empty. SHOW INTEGRATIONS has no LIKE that
+-- SNOWFLAKE_LEARNING_WH is the trial account's default. Over the eight days of
+-- the build it metered 3.1433 credits -- 51.4% of every warehouse credit spent,
+-- against 2.9695 for WH_INGEST_XS, WH_TRANSFORM_XS and WH_APP_XS combined. Any
+-- Snowsight worksheet that does not name a warehouse resumes it, and 79.3% of
+-- all metered compute in this account was idle rather than execution.
+--
+-- RM_POC is level = WAREHOUSE and covers only the warehouses assigned to it, so
+-- it never saw a credit of this. RM_POC read 3.02 against a budget reading 5.87,
+-- and 2.9695 vs 3.02 is that gap closed: the missing half was one warehouse
+-- nobody had assigned because nobody had created it.
+--
+-- Not dropped. It belongs to the account, not to this project, and dropping it
+-- would leave Snowsight sessions with no default warehouse. Given this project's
+-- auto-suspend instead, which is reversible and costs nothing.
+--
+-- AUTO_SUSPEND rather than an explicit SUSPEND. ALTER WAREHOUSE ... SUSPEND
+-- fails with "Invalid state" when the warehouse is already suspended, which
+-- would abort this file on its second run and break the only property it
+-- promises. Setting the timeout suspends it within a minute of the last query
+-- and does the same thing on every subsequent run: nothing.
+-- -----------------------------------------------------------------------------
+ALTER WAREHOUSE IF EXISTS SNOWFLAKE_LEARNING_WH SET AUTO_SUSPEND = 60;
+
+-- -----------------------------------------------------------------------------
+-- 10. Verify
+--
+-- Every one of these should come back empty except SHOW WAREHOUSES, which keeps
+-- SNOWFLAKE_LEARNING_WH, and SHOW INTEGRATIONS, which keeps
+-- SNOWFLAKE$LOCAL_APPLICATION. SHOW INTEGRATIONS has no LIKE that
 -- would catch all six prefixes at once, so it is listed whole — read it for
 -- anything named GIT_API_, SI_, NI_, EAI_ or TMP_.
 -- -----------------------------------------------------------------------------
