@@ -100,6 +100,9 @@ jobs:
           mkdir -p ~/.dbt
           printf '%s' "$PRIVATE_KEY" > ~/svc_ci.p8
           chmod 600 ~/svc_ci.p8
+          # profiles.yml defaults private_key_path to /work/rsa_ci.p8, which is
+          # where the local container mounts it and is nowhere on a runner.
+          echo "DBT_KEY_PATH=$HOME/svc_ci.p8" >> "$GITHUB_ENV"
 
       # A clone is free and instant. Building on it means a pull request never
       # touches MART, and the clone is named for the run so two pull requests
@@ -141,6 +144,10 @@ jobs:
           SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
           SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
           DBT_TARGET_SCHEMA: MART_CI_${{ github.run_id }}
+          # Set here rather than defaulted in profiles.yml, because
+          # dbt_project.yml's on-run-start overrides the profile's query_tag.
+          # Without it CI credits bill to Part 8 alongside the real builds.
+          DBT_QUERY_TAG: p14:ci_dbt
         run: dbt build --project-dir dbt --profiles-dir dbt --target ci
 
       # always(), so a failed build still drops the clone. A clone costs nothing

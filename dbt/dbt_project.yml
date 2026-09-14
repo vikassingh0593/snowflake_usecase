@@ -27,9 +27,15 @@ models:
       # dbt's default concatenation -- that default exists so developers sharing
       # a warehouse do not collide, which is not the situation here. The layer
       # names are the architecture.
-      +schema: MART
+      # Env-driven so CI lands in the run's clone. DBT_TARGET_SCHEMA has been
+      # set by the workflow since Part 14 and read by nothing, which meant a
+      # pull request would have built into MART itself -- the opposite of what
+      # cloning it was for.
+      +schema: "{{ env_var('DBT_TARGET_SCHEMA', 'MART') }}"
       +materialized: table
       +tags: ["mart"]
 
+# This runs after the connection is made and overrides profiles.yml's
+# query_tag, so the two have to agree or the profile's value never takes effect.
 on-run-start:
-  - "ALTER SESSION SET QUERY_TAG = 'p06:dbt_seeds'"
+  - "ALTER SESSION SET QUERY_TAG = '{{ env_var('DBT_QUERY_TAG', 'p08:dbt') }}'"

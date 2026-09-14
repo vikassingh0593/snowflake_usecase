@@ -71,4 +71,5 @@ fi
 docker run --rm -it \
   -v "$PWD":/work \
   -e DBT_KEY_PATH=/work/rsa_ci.p8 \
+  -e DBT_QUERY_TAG="${DBT_QUERY_TAG:-p08:dbt}" \
   "$IMAGE" "$@" --profiles-dir . --target dev
