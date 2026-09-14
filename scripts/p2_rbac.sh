@@ -3,6 +3,13 @@
 # scripts/p2_rbac.sh — grant the Snowflake service principals access.
 # Run in Azure Cloud Shell, AFTER granting consent at both URLs.
 #
+# THE TWO APP NAMES BELOW BELONG TO ONE BUILD. Dropping and recreating the
+# integrations mints new service principals with new names, and this script will
+# then match nothing and report NOT_FOUND for both. After a rebuild, read
+# AZURE_MULTI_TENANT_APP_NAME from DESC EXTERNAL VOLUME EXVOL_QC, DESC
+# INTEGRATION SI_QC_AZURE and DESC INTEGRATION NI_QC_SNOWPIPE, and put the part
+# before the underscore into APP_BLOB and APP_QUEUE.
+#
 # Snowflake issued TWO apps for this account:
 #   n1fam5snowflakepacint  -> external volume + storage integration (blob)
 #   14bjnhsnowflakepacint  -> notification integration (queue)

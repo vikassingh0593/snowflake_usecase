@@ -60,14 +60,28 @@ MANIFEST=(
   the Event Grid system topic and the snowpipe-queue it publishes to."
 "sql|Snowflake foundation|sql/p1_bootstrap.sql"
 "sql|Corrections found in the bootstrap output|sql/p1_fix.sql"
-"gate|Service-user key pairs|Key-pair only. No password is written anywhere:
+"gate|Register the service-user public keys|REUSE THE KEYS YOU ALREADY HAVE. DROP USER removes the registration,
+  not the key pair. If rsa_kafka.p8 and rsa_ci.p8 are still in the repo root,
+  generating new ones only invalidates dbt/profiles.yml and the connector
+  config for nothing. Generate only if they are missing:
       openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_kafka.p8 -nocrypt
       openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
       openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_ci.p8 -nocrypt
       openssl rsa -in rsa_ci.p8 -pubout -out rsa_ci.pub
-  Then set each public key on its TYPE = SERVICE user:
-      bash scripts/p2_rbac.sh
-  rsa_key*, *.p8 and .env are gitignored. Confirm that before the next commit."
+
+  Re-register both public keys on their TYPE = SERVICE users. The header and
+  footer lines and every newline must come out, which is why this is a command
+  and not a paste:
+      K=\$(grep -v -- '-----' rsa_kafka.pub | tr -d '\\n')
+      snow sql -c qcpoc -q \"ALTER USER SVC_KAFKA SET RSA_PUBLIC_KEY = '\$K'\"
+      K=\$(grep -v -- '-----' rsa_ci.pub | tr -d '\\n')
+      snow sql -c qcpoc -q \"ALTER USER SVC_CI SET RSA_PUBLIC_KEY = '\$K'\"
+
+  Verify before going on -- RSA_PUBLIC_KEY_FP populated means registered:
+      snow sql -c qcpoc -q 'DESC USER SVC_KAFKA' | grep RSA_PUBLIC_KEY_FP
+
+  scripts/p2_rbac.sh is NOT this step. It grants Azure roles, and it belongs at
+  step 6. rsa_key*, *.p8 and .env are gitignored; confirm before committing."
 "sql|Azure integrations|sql/p2_integrations.sql"
 "gate|Azure tenant-admin consent and RBAC|THE LONGEST STEP IN THE PROJECT, AND THE ONE THAT WASTES TIME.
   Three objects were just created and each one minted its OWN service principal:
@@ -95,6 +109,13 @@ MANIFEST=(
        Reader on the three blob containers, never contributor: Snowflake reads
        them and never writes them. archive is the exception because Iceberg
        writes there. The queue needs contributor because Snowpipe dequeues.
+
+  scripts/p2_rbac.sh automates step 4 ONLY IF ITS APP NAMES ARE UPDATED FIRST.
+  It has the previous build's two app prefixes hardcoded at the top, and new
+  principals get new names, so as it stands it will silently find nothing. Read
+  AZURE_MULTI_TENANT_APP_NAME from the three DESC outputs, put the prefixes in
+  APP_BLOB and APP_QUEUE, then run it in Cloud Shell. Portal clicking is fine
+  too; the script only exists because container-scoped grants are fiddly.
 
   RBAC PROPAGATION TAKES ABOUT FIVE MINUTES. Verification failing straight after
   a grant means wait, not debug. This is the single most common way to lose half
