@@ -36,21 +36,41 @@
 -- What no CREATE-time check can cover is the table underneath changing later.
 -- §11 and §12 were built in isolation and §12 silently broke §11.
 --
--- STEP 2 ATTEMPTS INCREMENTAL FIRST AND EXPECTS TO BE REFUSED. The refusal is
--- the proof that the policy is the cause rather than a coincidence of timing,
--- and it is worth one statement to have it rather than infer it. Two outcomes,
--- both recorded:
+-- STEP 2 ATTEMPTS INCREMENTAL FIRST AND WAS REFUSED. Measured on the run of
+-- 2026-09-14 06:55:01, recovered from QUERY_HISTORY:
 --
---   refused at CREATE   the policy is the cause, proven, and Snowflake does
---                       check incrementalizability against attached policies.
---   accepted at CREATE  a worse finding -- the check does not see the policy,
---                       and the table would fail again at the next refresh.
+--   FAILED_WITH_ERROR   SQL compilation error: line 2 at position 5:
+--                       Change tracking is not supported on queries with
+--                       correlated subquery expressions.
 --
--- Either way the file lands on REFRESH_MODE = FULL, which re-aggregates all
--- 19,377 rows hourly. At this size that is seconds and the credits round to
--- nothing. THE HONEST STATEMENT IS THAT GOVERNANCE FORCED THE PERFORMANCE
--- LAYER BACK TO A FULL REBUILD, and at a size where that mattered this would
--- be an architectural conflict rather than a footnote.
+-- A COMPILATION ERROR, NOT A REFRESH ERROR. Snowflake's create-time check does
+-- see the attached row access policy and does refuse. The policy is proven to
+-- be the cause rather than inferred from the timing of the failures, which is
+-- what the diagnostic attempt was for.
+--
+-- THAT SHARPENS THE FINDING RATHER THAN SOFTENING IT. The check is not blind
+-- to policies; it only runs at CREATE. An already-created dynamic table is
+-- never re-validated when a policy is attached to its source. It keeps the
+-- INCREMENTAL mode it was granted and discovers at the next refresh that the
+-- mode is no longer achievable. The exact statement refused outright today was
+-- already running yesterday, and nothing revisited it.
+--
+-- The file lands on REFRESH_MODE = FULL, which re-aggregates all 19,377 rows
+-- hourly. At this size that is seconds and the credits round to nothing. THE
+-- HONEST STATEMENT IS THAT GOVERNANCE FORCED THE PERFORMANCE LAYER BACK TO A
+-- FULL REBUILD, and at a size where that mattered this would be an
+-- architectural conflict rather than a footnote.
+--
+-- MEASURED AFTER THE REPAIR. refresh_mode FULL, configured_refresh_mode FULL,
+-- refresh_mode_reason None, scheduling_state ACTIVE, last_suspended_on None,
+-- 7,626 rows. Four checks green, including 19,377 orders summed reconciling
+-- exactly to 19,377 delivered in MART.FCT_ORDER. The two refreshes that
+-- followed read FULL, the ON_CREATE initialize, then NO_DATA, the forced
+-- refresh finding no delta -- correct, because MART has not moved since.
+--
+-- THE APPLICATION SERVED STALE DATA FOR 19 HOURS 39 MINUTES. Last good refresh
+-- 2026-09-13 11:15:28, five failures, repaired 2026-09-14 06:55:04. Nothing on
+-- any screen said so, and nothing would have.
 --
 -- Rejected alternatives: sourcing the aggregate from CORE instead of MART
 -- (SERVE would stop being governed, which is the point of SERVE); moving
