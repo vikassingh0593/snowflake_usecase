@@ -389,11 +389,32 @@ four complaints in five and puts the rest in front of a person, and the wording
 on screen says where the number came from and that retraining the model
 invalidates it.
 
-**The hourly aggregate refreshes incrementally**, applying only what changed
-rather than recomputing the whole history each time. That required splitting
-it: the maintained table holds counts and totals, and the percentages and
-averages are computed in a view above it. An average cannot be updated from a
-change without also knowing how many rows it covered.
+**The hourly aggregate was built to refresh incrementally** — applying only what
+changed rather than recomputing the whole history each time. That required
+splitting it: the maintained table holds counts and totals, and the percentages
+and averages are computed in a view above it. An average cannot be updated from
+a change without also knowing how many rows it covered.
+
+**It does not refresh incrementally any more, and the reason is worth more than
+the feature was.** The protection added in §11 — the rule that filters which
+rows of the order table a given role may see — is applied by attaching a
+condition to every query that reads that table. A maintained table can only
+apply changes incrementally if it can track what changed, and it cannot track
+changes through a condition of that shape. So on the afternoon the protection
+was switched on, the aggregate stopped being maintainable.
+
+**Nothing announced it.** The aggregate had already been created and accepted;
+it kept its incremental setting and simply started failing at each refresh,
+five times, and then stopped trying. The operations screen went on showing the
+previous day's figures for **nineteen hours and thirty-nine minutes** with
+nothing on the page to indicate it. It now recomputes the whole history each
+hour, which at this size takes seconds.
+
+The general point, and it is not about this one table: **a protection attached
+to shared data changes what everything built on top of it is able to do,** and
+those things were checked against a version of the data that no longer exists.
+Neither feature's documentation mentions the other. Two capabilities built two
+weeks apart, each correct alone.
 
 ---
 
@@ -483,17 +504,43 @@ reports whatever it last happened to say.**
 |---|---|
 | Compute clusters | 3 × extra-small, never resized |
 | Idle shutdown | 60 seconds |
-| Resource monitor | 60 credits, notify at 50/75/90%, suspend at 100% |
+| Spend limit, whole account | 60 credits/month, warns at 50/75/90%, **never switches anything off** |
+| Spend limit, this project | 60 credits, warns then suspends the project's own clusters |
+| Overall budget | 80 credits |
 | Data retention | 1 day |
 | Statement timeout | 600 seconds |
 | Attribution | Every session tagged; every route's spend separable |
-| Account budget | **Not configured** |
 
-The resource monitor covers warehouse compute only. Continuous ingestion,
-serverless refresh and search optimization are invisible to it; an account
-budget is the only control that sees them.
+**Total spend to date: 5.41 credits over eight days — 6.8% of the budget.**
 
-Confirmed spend: 3.78 credits. That figure predates all ingestion work.
+Three surprises came out of measuring it rather than assuming it, and all three
+run against the received wisdom.
+
+**The biggest consumer is not this platform.** A warehouse the vendor creates by
+default with every account accounts for **55% of all compute spend**, on more
+days than any cluster this project built. It is where a query lands when nobody
+picks a cluster explicitly. Twelve stages of engineering cost less than it did,
+and until 2026-09-14 nothing was watching it. That is what the account-wide
+limit above was added for.
+
+**Waiting costs more than working.** Only 7% of compute spend is query execution.
+The other 93% is start-up time and the sixty-second idle window, paid hundreds
+of times over for statements lasting seconds. **At this size, grouping work
+together matters far more than cluster size does** — which is the opposite of
+the advice usually given.
+
+**The always-on worry was real and trivial.** Continuously-running ingestion —
+the part of the design the cost rules were written to guard against — came to
+0.016 credits over eight days, three tenths of one percent. The streaming
+ingestion of roughly 550,000 rows cost 0.0001 credits. The guard was structurally
+right and numerically pointless, and that is worth recording rather than quietly
+dropping.
+
+The project's own limit and the account-wide one measure different things, and
+for twelve stages the difference went unnoticed: the project limit was reading
+45% of compute spend while being described as if it read all of it. The
+account-wide limit deliberately has **no automatic switch-off** — one that
+suspended everything would also suspend the cluster needed to find out why.
 
 ---
 
@@ -544,8 +591,11 @@ training procedure.
 | **Text classification** | **Complete** |
 | **Application layer** | **Complete** |
 | **Governance** | **Complete** — 11 of 11 controls built and verified |
+| Scheduling and orchestration | **Designed, never built.** The platform owns no scheduled jobs at all. Every stage was run by hand, so the absence produced no symptom and went unnoticed for five stages |
 | Forecasting | Not started |
 | Outbound sharing | Not started |
+| Automated build and release | Not started |
+| Closing cost report | Not started |
 
 ---
 

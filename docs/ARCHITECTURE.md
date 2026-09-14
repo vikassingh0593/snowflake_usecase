@@ -19,7 +19,8 @@ and to make the resulting analysis both trustworthy and cheap to run.
 **Status on 2026-09-14: twelve of fifteen stages built and verified.** Ingestion
 (13 of 14 routes), conformance, the dimensional model, two models, the
 application layer and governance are done. Outbound sharing, CI/CD and the
-closing cost report are not.
+closing cost report are not. Orchestration (§7) is design only — it was never
+built and nothing noticed, because every stage was driven by hand.
 
 One database, `QCOMMERCE`. Nine schemas, and the schema an object lives in *is*
 the statement of who may read it — that is the whole access design, not a naming
@@ -390,6 +391,17 @@ on this account. Covered as prose, not code.
 
 ## 7. Orchestration
 
+> **DESIGN, NOT AS BUILT. This section was never built.**
+> `SHOW TASKS IN DATABASE QCOMMERCE` returns zero rows (2026-09-14). The only
+> task on the account is Snowflake's own `CORTEX_BASE_MODELS_REFRESH_TASK` in
+> `SNOWFLAKE.MODELS`. Ingestion runs on pipes, transformation on dbt invoked by
+> hand, and the one scheduled object that exists is the dynamic table in §16
+> Part 11. Everything below — the `FINALIZER`, the return-value handoff, the
+> stream gate, the serverless-versus-warehouse credit comparison — is intent
+> that nothing in the account implements. It went unnoticed for five parts
+> because no downstream step needed it: dbt and Snowpark were driven by hand
+> at every stage, so the absence never produced a symptom.
+
 | Capability | Where it earns its place |
 |---|---|
 | **Serverless vs warehouse tasks** | one DAG branch each way, credits compared in `OPS` |
@@ -591,15 +603,25 @@ The clone is free; `dbt build` on it is not.
 | Control | Setting |
 |---|---|
 | Warehouses | `WH_INGEST_XS`, `WH_TRANSFORM_XS`, `WH_APP_XS` — all XS, `AUTO_SUSPEND = 60`, `AUTO_RESUME = TRUE`. Never resized |
-| Resource monitor | `RM_POC`, quota 60, `FREQUENCY = NEVER`, notify 50/75/90, suspend 100/110. **Sees warehouse credits only** |
-| Account budget | **80 credits.** The only thing covering serverless — Snowpipe, Streaming, dynamic table refresh, serverless tasks |
+| Resource monitor, account | `RM_ACCOUNT`, quota 60, `FREQUENCY = MONTHLY`, notify 50/75/90, **no suspend trigger**. Created 2026-09-14. Covers every warehouse including ones created later |
+| Resource monitor, project | `RM_POC`, quota 60, `FREQUENCY = NEVER`, notify 50/75/90, suspend 100/110, attached to the three `WH_*` warehouses. `NEVER` makes its quota a **lifetime** cap rather than a recurring one |
+| Account budget | **80 credits**, set and verified. Reachable only by `CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT()` — there is no `SHOW BUDGETS` and no `ACCOUNT_USAGE.BUDGETS` on this account, which is why the Snowsight page renders empty |
 | Account params | `STATEMENT_TIMEOUT_IN_SECONDS = 600`, `DATA_RETENTION_TIME_IN_DAYS = 1` |
 | Attribution | `ALTER SESSION SET QUERY_TAG = '<part>:<component>'` on every session |
 | Roles | `QC_ADMIN` > `QC_LOADER`, `QC_ENGINEER`, `QC_ANALYST`. Service users `SVC_KAFKA`, `SVC_CI`, both `TYPE = SERVICE`, key-pair only |
 
-**Nothing runs 24/7.** Anything always-on — materialized views, search optimization,
-hybrid tables, Snowflake Postgres — is a deliberate short burst, built and dropped in one
-sitting. 3.78 credits were already consumed before the build began.
+**Nothing this project built runs 24/7.** Anything always-on — materialized views, search
+optimization, hybrid tables, Snowflake Postgres — is a deliberate short burst, built and
+dropped in one sitting. The account is still never quite at zero: Snowflake's own
+`CORTEX_BASE_MODELS_REFRESH_TASK` runs daily and an internal `_BACKFILL_TASK` meters as
+`SERVERLESS_TASK`. Neither can be stopped and together they are under 0.002 credits.
+
+**No suspend trigger on the account monitor, deliberately.** An account-level monitor that
+suspends stops every warehouse at once, including the one needed to investigate why. The
+80-credit budget is the backstop above it and `RM_POC` the hard stop below.
+
+See §16, *Cost as measured*, for what the three instruments actually reported and why they
+disagree.
 
 Key-pair auth only; no password in any file. `rsa_key*` and `.env` stay out of git;
 `dbt_packages/` goes in.
@@ -609,7 +631,7 @@ Key-pair auth only; no password in any file. `rsa_key*` and `.env` stay out of g
 ## 16. As built — real identifiers and what differed from the design
 
 Everything below is verified, not planned. Design sections above describe intent;
-this section is the account as it actually stands on 2026-09-09.
+this section is the account as it actually stands on 2026-09-14.
 
 ### Identifiers
 
@@ -935,7 +957,7 @@ reads, and `APP.QC_CONSOLE` is deployed against it.
 
 | Object | Rows | What |
 |---|---|---|
-| `SERVE.SLA_STORE_HOUR_AGG` | 7,626 | dynamic table, `TARGET_LAG = 1 hour`, **INCREMENTAL** |
+| `SERVE.SLA_STORE_HOUR_AGG` | 7,626 | dynamic table, `TARGET_LAG = 1 hour`, **`FULL` since 2026-09-14** — it was `INCREMENTAL` until §12's row access policy made that impossible. See *The governance layer broke the performance layer* below |
 | `SERVE.SLA_BY_STORE_HOUR` | 7,626 | view — the ratios, and the name the app knows |
 | `SERVE.ORDER_RISK` | 4,777 | the model's TEST window, scored, outcome carried |
 | `SERVE.COMPLAINT_TRIAGE` | 300 | routed on the measured 0.235 confidence gate |
@@ -956,9 +978,12 @@ are not incrementally maintainable — an average cannot be updated from a delta
 without its denominator — so every refresh re-aggregated all 19,377 rows.
 Split into counts and sums below, division above, `REFRESH_MODE = INCREMENTAL`
 stated explicitly so an unmaintainable query fails at `CREATE` rather than
-downgrading silently. The platform now reports `refresh_mode INCREMENTAL`,
+downgrading silently. The platform reported `refresh_mode INCREMENTAL`,
 `refresh_mode_reason None`. This spends one of the two dynamic tables the cost
 rules allow.
+
+**That held for one day.** The table is `FULL` now, and not by choice — see
+below.
 
 The app's contract did not change across that restructuring, which is the
 argument for `SERVE` demonstrated rather than asserted.
@@ -991,6 +1016,75 @@ from the stage when opened. `CREATE STREAMLIT` is only needed the first time or
 when an object property changes — `CREATE OR REPLACE` issues a new `url_id` and
 breaks every bookmark.
 
+### The governance layer broke the performance layer
+
+**§11 and §12 were built in isolation and §12 silently broke §11.** Found on
+2026-09-14, two days late, by reading `scheduling_state` on a `SHOW DYNAMIC
+TABLES` issued for an unrelated reason.
+
+```
+002766: Dynamic table 'QCOMMERCE.SERVE.SLA_STORE_HOUR_AGG' is no longer
+incrementalizable because of reason 'Change tracking is not supported on
+queries with correlated subquery expressions.'. Please recreate the dynamic
+table.
+```
+
+Five consecutive failures on 2026-09-13, 12:07 to 15:31, then the table
+suspended itself. The last success was `INCREMENTAL` at 10:18. **The query
+never changed.** *No longer* is the whole message.
+
+A row access policy body **is** a correlated subquery, injected into every
+query that touches the protected table. `GOV.RAP_STORE` went onto
+`MART.FCT_ORDER` between the last success at 11:15 and the first failure at
+12:07, and `SLA_STORE_HOUR_AGG` aggregates `MART.FCT_ORDER`.
+
+**One policy, three consequences, in ascending order of how badly they behave:**
+
+| Object | How it failed | When you find out |
+|---|---|---|
+| Materialized view on `FCT_ORDER` | refused at `CREATE` | immediately |
+| Dynamic table on `FCT_ORDER` | accepted, validated `INCREMENTAL`, then stopped | at the next refresh, in a log nobody reads |
+| The application | served 11:15 Wednesday data for **19 h 39 min** | never |
+
+**The create-time check is not blind to policies — it only runs at `CREATE`.**
+Proven rather than inferred: re-issuing the identical `CREATE … REFRESH_MODE =
+INCREMENTAL` on 2026-09-14 was refused with a **SQL compilation error**, not a
+refresh error:
+
+> `SQL compilation error: line 2 at position 5: Change tracking is not supported on queries with correlated subquery expressions.`
+
+So Snowflake *would* have refused this table had it been created after the
+policy. An already-created dynamic table is never re-validated when a policy is
+attached to its source: it keeps the `INCREMENTAL` mode it was granted and
+discovers at the next refresh that the mode is no longer achievable. **The exact
+statement refused outright today was already running yesterday, and nothing
+revisited it.**
+
+This inverts §11's own design principle. That section declared
+`REFRESH_MODE = INCREMENTAL` explicitly *so an unmaintainable query fails at
+`CREATE` rather than downgrading silently* — and it did exactly that, once. No
+create-time check covers the table underneath changing later.
+
+**Repaired to `REFRESH_MODE = FULL`** (`sql/p12_serve_repair.sql`), which
+re-aggregates all 19,377 rows hourly. At this size that is seconds and the
+credits round to nothing. **The honest statement is that governance forced the
+performance layer back to a full rebuild**, and at a size where that mattered it
+would be an architectural conflict rather than a footnote. After the repair:
+`refresh_mode FULL`, `scheduling_state ACTIVE`, `last_suspended_on None`, 7,626
+rows, four checks green including 19,377 orders summed reconciling exactly to
+19,377 delivered.
+
+Rejected alternatives, each of which trades away something §11 or §12 exists to
+demonstrate: sourcing the aggregate from `CORE` (`SERVE` stops being governed);
+moving `RAP_STORE` onto a view (defeats §12's finding that a base policy travels
+every path); dropping the policy (loses the governance layer to save a refresh
+mode).
+
+**The general lesson has nothing to do with dynamic tables.** A control attached
+to a shared base table changes the queryability of everything above it, and the
+things above it were validated against a version of the table that no longer
+exists. Nothing in either feature's documentation mentions the other.
+
 ### Governance as built — Part 12
 
 All eleven concerns built and measured.
@@ -1015,6 +1109,7 @@ than a privilege refusal, so it is an API that moved:
 | Cost attribution | `QUERY_ATTRIBUTION_HISTORY` by `QUERY_TAG` | 0.3844 attributed credits, p09 at 34.7% |
 | Search optimization | built, measured, dropped | **1,981,440 bytes scanned before and after** — zero pruning on one partition |
 | Materialized view | refused twice, then built elsewhere | **a row access policy makes MVs on that table impossible** |
+| *(unplanned)* | `RAP_STORE` also broke the §11 dynamic table | **and that one was not refused — it was accepted, then stopped.** See the section above |
 | Alerting | fired on a seeded failure, then dropped | found a check that had been red for two parts |
 
 **Verified by role, not by grant.** `QC_ANALYST` sees `A***********`, a SHA2
@@ -1086,20 +1181,89 @@ corrupted the parse. It reported clean and dirty on correct files alike. Nine re
 this account do X — and was not probing *signatures*. The discipline needs
 extending to the exact call rather than the family it belongs to.
 
+### Cost as measured — three instruments, three different totals
+
+The account budget's `GET_SPENDING_HISTORY` is the first instrument in this
+project that sees warehouse and serverless together. Reading it beside the other
+two contradicted an assumption held since Part 3.
+
+| Instrument | Reports | Over |
+|---|---:|---|
+| Budget `GET_SPENDING_HISTORY` | **5.410417** | 8 days, all service types, 6.8% of the 80 limit |
+| `ACCOUNT_USAGE.METERING_DAILY_HISTORY` | 5.586925 | the same 8 days |
+| `RM_POC.used_credits` | 2.55 | warehouse only, and only its own three warehouses, and only since it started |
+| `QUERY_ATTRIBUTION_HISTORY` | 0.3844 | tagged query execution only |
+
+**The budget and `ACCOUNT_USAGE` disagree by 0.192815 and the budget is right.**
+`CREDITS_ADJUSTMENT_CLOUD_SERVICES` is the exact negative of cloud services on
+seven of eight days — the 10% free allowance cancelling it entirely. Only
+2026-09-12 bills cloud services, because zero compute that day means zero
+allowance to offset. Net of the adjustment `ACCOUNT_USAGE` reads 5.408292
+against the budget's 5.394110. **`CREDITS_USED` is not what you pay.**
+
+#### Where the credits actually went
+
+| Warehouse | Total | Monitored | Days |
+|---|---:|---|---:|
+| **`SNOWFLAKE_LEARNING_WH`** | **3.142465** | **no** | 7 |
+| `WH_TRANSFORM_XS` | 1.775760 | `RM_POC` | 5 |
+| `WH_APP_XS` | 0.708300 | `RM_POC` | 2 |
+| `WH_INGEST_XS` | 0.086368 | `RM_POC` | 6 |
+| `CLOUD_SERVICES_ONLY` | 0.001714 | — | 4 |
+
+**A Snowflake-provided default warehouse is the single biggest consumer on this
+account** — 55.0% of all warehouse spend, on more days than any warehouse this
+project built, entirely unwatched. The three designed warehouses are 45%. Twelve
+parts of engineering cost less than whatever ran in `SNOWFLAKE_LEARNING_WH`,
+which is what a Snowsight worksheet with no warehouse explicitly selected lands
+on. `RM_ACCOUNT` now covers it.
+
+`RM_POC` reconciles exactly once both of its blind spots are applied — three of
+six warehouses unassigned, and `FREQUENCY = NEVER` with `start_time 2026-09-09
+11:50:26` so it began counting two days into the build: 2.566476 computed
+against 2.55 reported. It was never wrong, only narrower than anyone read it as.
+
+#### Three findings that only appear when the instruments are read together
+
+**Idle time is the cost story, not compute.** 0.3844 attributed against 5.3941
+metered — **93% of warehouse spend is not attributed query execution.** An XS
+warehouse bills 1 credit/hour and `AUTO_SUSPEND` is 60 seconds, so every
+isolated statement in an interactive session buys a minute of billed time plus
+resume for a few seconds of work, hundreds of times over. **At this scale
+batching statements matters far more than warehouse size**, which is the
+opposite of the usual advice.
+
+**Serverless was structurally right to worry about and numerically irrelevant.**
+0.016307 credits over eight days, 0.30% of the total. `PIPE` totals 0.000113
+with four of seven days at exactly zero — two continuously-running ingestion
+mechanisms for a rounding error. The cost rules spent real design effort here
+and it is worth recording honestly rather than quietly dropping.
+
+**Ingestion barely computed.** `WH_INGEST_XS` spent 0.067757 on cloud services
+against 0.018611 on compute — **3.64×**. Thirteen routes of pipes, stages,
+`COPY` metadata, `SHOW` and `DESCRIBE` are almost entirely metadata operations,
+and metadata does not run on the warehouse.
+
+`QUERY_ACCELERATION` at 0.005849 on 2026-09-08 needs no further query: it
+confirms the §16 delta six days after the decision. The feature is on by
+default, it did bill as serverless, and setting
+`ENABLE_QUERY_ACCELERATION = FALSE` was correct.
+
 ### Not yet done
 
-- **Account budget** - still the only control covering serverless spend, and
-  still not set. `RM_POC` sees virtual-warehouse credits only; Snowpipe,
-  Snowpipe Streaming, dynamic table refresh and search optimization are all
-  invisible to it. Thirteen ingestion mechanisms, a CORE build, a MART build and
-  a registered model have now run without it. Snowsight -> Admin -> Cost
-  Management -> Budgets, 80 credits.
-- **Credits backfill** - `sql/p3_credits_backfill.sql` once `ACCOUNT_USAGE`
-  catches up (~3 h). 3.78 credits predates Parts 3-5 entirely. Part 12's
-  `QUERY_ATTRIBUTION_HISTORY` report now answers *which part spent it* —
-  0.3844 attributed credits, p09 at 34.7% — but attributed query compute
-  excludes idle warehouse time and all serverless, so it is a floor and not
-  the bill. The two measure different things.
+- ~~**Account budget**~~ **DONE, 2026-09-14.** Set at 80 credits and verified by
+  calling the object rather than by reading the Snowsight page, which renders
+  empty because there is no `SHOW BUDGETS` and no `ACCOUNT_USAGE.BUDGETS` on
+  this account. `RM_ACCOUNT` was added alongside it after the budget's own
+  history showed that `RM_POC` saw 45% of warehouse spend, not 100%. See *Cost
+  as measured* above.
+- ~~**Credits backfill**~~ **Superseded.** The budget's `GET_SPENDING_HISTORY`
+  answers what `sql/p3_credits_backfill.sql` was written to answer, without the
+  `ACCOUNT_USAGE` latency and with the cloud-services adjustment already
+  applied. The three instruments and why they disagree are in *Cost as
+  measured*. `QUERY_ATTRIBUTION_HISTORY` remains a floor rather than a bill —
+  0.3844 against 5.3941 metered, and that 93% gap turned out to be the most
+  useful number in the project.
 - **Mechanism 11 only, and not by choice.** External access is refused on a
   trial account (§1 Finding 3). 13 of 14 is the ceiling here.
 - **The Anaconda gate does not exist on this account.** It was assumed to block
@@ -1115,6 +1279,19 @@ extending to the exact call rather than the family it belongs to.
   container route via `scripts/dbt.sh`. Nothing outstanding now requires it.
 - **Outbound serving.** Reader account, private listing and the SQL API are
   Part 13. `SERVE` itself is built — Part 11.
+- **Orchestration was never built.** §7 is design. `SHOW TASKS IN DATABASE
+  QCOMMERCE` returns zero rows. The `FINALIZER`, the return-value handoff, the
+  stream gate and the serverless-versus-warehouse credit comparison are all
+  unwritten, and the absence produced no symptom because every stage was driven
+  by hand. The one scheduled object that exists is the §11 dynamic table.
+- **`sql/p9_report.sql` has never been run.** `corr_dist_load`, `q4_minus_q1`
+  and the fitted-versus-generator coefficient table are the one gap in the
+  Part 9 write-up.
+- **The Part 10 comparison that is now possible.** `AI_AGG` works (§1 Finding
+  1), and an aggregate over a single-row group is a scalar. The 300 complaints
+  could be classified by an LLM and scored against `OPS.COMPLAINT_TRUTH` for
+  roughly 0.05 credits. The TF-IDF classifier scores 5.41% on genuinely novel
+  phrasings; an LLM does not share that failure mode. Not run.
 - **Parts 13 through 15.** Outbound serving — reader account, private listing,
   SQL API (13), CI/CD (14), the cost model closed out against measured
   credits (15). Parts 10, 11 and 12 are built.

@@ -1315,6 +1315,123 @@ files in this part, applied unevenly.
 
 ---
 
+## Session 4 — 2026-09-14 — the cost instruments, and what they found
+
+Started as "the budget page shows nothing." Ended four findings deep, two of
+them things that had been quietly wrong for days.
+
+### The budget exists. `SELECT` was the wrong verb.
+
+`SELECT SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT()` returns
+*Unknown user-defined function*, which reads as a missing method and means
+something narrower. The tell was `SELECT * FROM TABLE(instance!METHOD())`:
+
+> `Invalid stored procedure 'GET_SPENDING_HISTORY' in FROM clause: Return table must declare a nonzero number of columns`
+
+It **resolved** the name — as a stored procedure — and then objected to the
+return shape, the same zero-column `TABLE()` signature that broke `ROW_COUNT`
+earlier in Part 12. Class instance methods here are procedures; they need
+`CALL`. The budget was 80 credits all along.
+
+**An error message names what the parser looked for, not what is missing.** That
+is the third time Part 12 has taught the same lesson and the first time it cost
+nothing to learn, because the probe enumerated instead of guessing.
+
+Three surfaces the documentation implies exist do not, which is the likeliest
+reason the Snowsight page renders empty — there is no `SHOW` behind it:
+
+```
+DESC CLASS SNOWFLAKE.CORE.BUDGET   ->  Unsupported feature 'CLASS'
+SHOW BUDGETS IN ACCOUNT            ->  Object type or Class 'BUDGETS' does not exist
+SNOWFLAKE.ACCOUNT_USAGE.BUDGETS    ->  does not exist or not authorized
+```
+
+### Finding 1 has been wrong since Part 0, and the billing knew
+
+`CORTEX_AI_FUNCTIONS_USAGE_HISTORY`:
+
+```
+AI_AGG            p00:probe   163 tokens   0.00030155   IS_COMPLETED True
+AI_SUMMARIZE_AGG  p00:probe   181 tokens   0.00033485   IS_COMPLETED True
+```
+
+Both ran on 2026-09-08, under this project's own probe tag. Re-tested all
+fourteen AI functions: **two work, twelve are gated.** The refusals name the
+underlying primitive rather than the surface function — `AI_SIMILARITY` is
+refused as `_AI_EMBED_WITH_PROMPT_1024` — so the gate is per-primitive and the
+two aggregates reach something it does not cover.
+
+The probe recorded a verdict per function; the finding recorded a conclusion
+about the account. Nine refusals became *"everything downstream of an LLM goes
+with it"* and two successes in the same run did not survive the summary.
+`AI_AGG` and `AI_SUMMARIZE_AGG` were never in the list of nine, so their absence
+read as untested rather than unrecorded.
+
+**Nothing re-reading the probe would have caught it.** The correction came from
+the billing, which has no opinion about what ought to have worked. **The spend
+is a harder test than the probe.**
+
+### `RM_POC` saw 45% of warehouse spend, not 100%
+
+Two causes compounding. Three of six warehouses have no monitor — and
+`SNOWFLAKE_LEARNING_WH`, a vendor default, is **the single biggest consumer on
+the account at 3.142465 credits over seven days, 55% of all warehouse spend**,
+more days than any warehouse this project built. And `RM_POC` is
+`FREQUENCY = NEVER` starting 2026-09-09 11:50:26, so it began counting two days
+in and its 60 credits never reset — a lifetime cap, not a monthly one.
+
+It reconciles exactly once both are applied: 2.566476 computed against 2.55
+reported. It was never wrong, only narrower than anyone read it as.
+
+`RM_ACCOUNT` created: 60 credits, `MONTHLY`, notify 50/75/90, **no suspend
+trigger** — one that suspends stops the warehouse needed to investigate.
+`level = ACCOUNT` confirmed after `ALTER ACCOUNT SET RESOURCE_MONITOR`.
+
+### §12 broke §11 two days ago and nothing said so
+
+Found by reading `scheduling_state` on a `SHOW DYNAMIC TABLES` issued for an
+unrelated reason.
+
+```
+002766: Dynamic table SERVE.SLA_STORE_HOUR_AGG is no longer incrementalizable
+because of reason 'Change tracking is not supported on queries with correlated
+subquery expressions.'
+```
+
+Five failures on 09-13 from 12:07 to 15:31, then self-suspension. Last success
+`INCREMENTAL` at 10:18. **The query never changed.** A row access policy body is
+a correlated subquery injected into every query touching the table, and
+`GOV.RAP_STORE` went onto `MART.FCT_ORDER` between 11:15 and 12:07.
+
+Re-issuing the identical `CREATE … INCREMENTAL` today was refused with a **SQL
+compilation error**, which proves the policy is the cause rather than leaving it
+inferred from timing — and sharpens the finding: **the create-time check is not
+blind to policies, it only runs at `CREATE`.** An already-created dynamic table
+is never re-validated when a policy lands on its source. The exact statement
+refused outright today was already running yesterday.
+
+Repaired to `REFRESH_MODE = FULL`. Four checks green, 19,377 orders summed
+reconciling exactly to 19,377 delivered. **The app served stale data for 19 h
+39 min with nothing on screen to say so.**
+
+### `QCOMMERCE` owns zero tasks
+
+`SHOW TASKS IN DATABASE QCOMMERCE` returns nothing. §7 — the `FINALIZER`, the
+return-value handoff, the stream gate, the serverless-versus-warehouse credit
+comparison — was never built, and the absence produced no symptom because every
+stage was driven by hand. Marked as design in the architecture doc.
+
+### The number that reframes the cost model
+
+0.3844 attributed query credits against 5.3941 metered. **93% of warehouse spend
+is not query execution** — it is resume overhead and the 60-second suspend tail,
+paid hundreds of times for statements lasting seconds. At this scale batching
+statements matters far more than warehouse size, which is the opposite of the
+usual advice. Serverless, the thing the cost rules were written to guard
+against, came to 0.016307 credits — 0.30%.
+
+---
+
 ## Pausing — 2026-09-10
 
 Nothing in this project runs on a schedule, so there is nothing to switch off in
@@ -1370,8 +1487,8 @@ Mechanisms 10-14 do not touch the source stack at all.
 
 | | |
 |---|---|
-| **Account budget** | Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget -> 80 credits + email. `RM_POC` caps virtual-warehouse credits only; Snowpipe, Snowpipe Streaming and dynamic-table refresh are invisible to it. Thirteen ingestion mechanisms, two CORE builds, a MART build, three registered model versions and a dynamic table on an hourly lag have now run against an account with no serverless cap at all |
-| **Credits backfill** | `sql/p3_credits_backfill.sql`, once `ACCOUNT_USAGE` has caught up. The ~3 h latency means Part 3-5 spend is still unmeasured. 3.78 credits is the last verified figure and it predates all of it |
+| ~~**Account budget**~~ | **CLOSED 2026-09-14.** 80 credits, set and verified by `CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT()` rather than by the Snowsight page, which renders empty because no `SHOW BUDGETS` exists on this account. `RM_ACCOUNT` added alongside it |
+| ~~**Credits backfill**~~ | **SUPERSEDED.** The budget's `GET_SPENDING_HISTORY` answers it without the `ACCOUNT_USAGE` latency and with the cloud-services adjustment already applied. 5.410417 credits over eight days, 6.8% of the limit. See Session 4 |
 
 The Session 1 foundation items are closed: `SVC_KAFKA` has a key pair
 (`HAS_KEYPAIR = true`) and Enterprise was confirmed by `CREATE MASKING POLICY`
@@ -1530,6 +1647,13 @@ Part 13 extends `SERVE` outward — reader account, private listing, SQL API.
 | `sql/p12_quality_lineage.sql` | One rule three ways, lineage three ways, credits per part |
 | `sql/p12_serverless.sql` | Search optimization and the materialized view. Estimate, build, measure, drop |
 | `sql/p12_alert.sql` | Alert on a seeded failure, then dropped. Email built, not sent |
+| `sql/p12_budget_probe.sql` | What the account budget is called, and why `SELECT` was the wrong verb |
+| `sql/p12_cost_reconcile.sql` | Three instruments, three totals, and which one is the bill |
+| `sql/p12_cost_ai_trace.sql` | What metered as AI on an account that refuses AI |
+| `sql/p12_ai_recheck.sql` | All fourteen AI functions, called. Two work. Spends AI credits on purpose |
+| `sql/p12_monitor_gap.sql`, `sql/p12_monitor_gap2.sql` | Why `RM_POC` reported less than half, in two passes |
+| `sql/p12_serve_repair.sql` | The two DDL fixes. Attempts `INCREMENTAL` expecting refusal, lands on `FULL` |
+| `sql/p12_serve_repair_verify.sql` | Recovers the repair's verdict from query history. Read-only |
 | `dbt/` | Pinned image, 9 MART models, 42 tests, `dbt_utils` |
 | `scripts/dbt.sh` | Builds `qc-dbt:1.12.4` once, forwards any dbt args |
 | `scripts/sql.sh` | Runs a SQL file, prints result tables and errors only. `--full` for everything |
