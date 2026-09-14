@@ -127,6 +127,16 @@ jobs:
           print("cloned")
           PY
 
+      # dbt_packages/ is committed so that Snowflake Workspaces, which cannot
+      # reach the internet without an external access integration, can run the
+      # project as-is. GitHub Actions has no such constraint, and resolving here
+      # from package-lock.yml means CI does not silently depend on a vendored
+      # directory being up to date. Without either, every MART model fails on
+      # the first dbt_utils.generate_surrogate_key call.
+      - name: dbt deps
+        if: steps.gate.outputs.configured == 'true'
+        run: dbt deps --project-dir dbt
+
       - name: dbt build against the clone
         if: steps.gate.outputs.configured == 'true'
         env:
