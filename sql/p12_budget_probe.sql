@@ -39,6 +39,27 @@
 --
 -- Class instance methods here are PROCEDURES. They are called with CALL.
 --
+-- WHAT THE CALL RUN RETURNED.
+--
+--   CALL root!GET_SPENDING_LIMIT()     ->  80
+--   CALL root!GET_SPENDING_HISTORY()   ->  27 rows, carrying SERVICE_TYPE
+--   CALL root!SHOW_BUDGET_DETAILS()    ->  Unknown user-defined function
+--   CALL root!GET_LINKED_...()         ->  Unknown user-defined function
+--
+-- The budget exists and the 80-credit limit created through Snowsight landed.
+-- Two of the four method names were correct and two were inferred rather than
+-- read, and the two inferred ones do not exist -- which is the same failure
+-- the CALL/SELECT confusion masked, arriving a second time from the other
+-- direction. With no DESC CLASS on this account there is no way to read the
+-- method list, so STEP 2 below enumerates instead of guessing a third time.
+--
+-- THE REASON THIS MATTERS MORE THAN THE LIMIT. GET_SPENDING_HISTORY breaks
+-- spend down by SERVICE_TYPE, and the first rows back are PIPE,
+-- SNOWFLAKE_COCO_SNOWSIGHT and TELEMETRY_DATA_INGEST -- serverless, none of
+-- which RM_POC can see. RM_POC reads level=WAREHOUSE and 2.42 credits. The
+-- budget is the only instrument in this project that reports both, which is
+-- the answer to a question open since Part 3.
+--
 -- The lesson generalises past budgets, and it is the same one Part 12 kept
 -- teaching: an error message names what the parser looked for, not what is
 -- missing. "Unknown user-defined function" was never evidence about the
@@ -128,6 +149,17 @@ def run(session):
         tail = "" if len(res) <= limit else " ... +{} more".format(len(res) - limit)
         return "{} row(s): ".format(len(res)) + " | ".join(parts) + tail
 
+    def names_of(res, *cols):
+        """One line of names from a SHOW, which is what enumeration needs."""
+        out = []
+        for r in res:
+            v = col(r, *cols)
+            if v is not None:
+                out.append(str(v))
+        if not out:
+            return "{} row(s), no name column".format(len(res))
+        return "{}: {}".format(len(out), ", ".join(out[:40]))
+
     def attempt(item, stmt, summarise=render):
         """Run one statement. Record what came back, or the error verbatim."""
         try:
@@ -146,11 +178,46 @@ def run(session):
     # Ordered by what each settles. GET_SPENDING_LIMIT answers the original
     # question -- did the limit created in Snowsight actually land. The rest
     # describe what landed.
+    for method in ("GET_SPENDING_LIMIT", "GET_SPENDING_HISTORY"):
+        attempt(
+            "CALL root!{}()".format(method),
+            "CALL {}!{}()".format(ROOT, method),
+        )
+
+    # -- find the remaining method names rather than guess them ----------------
+    # SHOW_BUDGET_DETAILS and GET_LINKED_NOTIFICATION_INTEGRATION were inferred
+    # and do not exist. DESC CLASS is unsupported here, so the method list
+    # cannot be read directly -- but a class instance's methods are procedures,
+    # and procedures are enumerable. Whichever of these answers ends the
+    # guessing permanently.
+    for item, stmt in (
+        ("procedures in SNOWFLAKE.LOCAL", "SHOW PROCEDURES IN SCHEMA SNOWFLAKE.LOCAL"),
+        ("objects in SNOWFLAKE.LOCAL", "SHOW OBJECTS IN SCHEMA SNOWFLAKE.LOCAL"),
+        ("procedures LIKE budget", "SHOW PROCEDURES LIKE '%BUDGET%' IN ACCOUNT"),
+        (
+            "INFORMATION_SCHEMA.PROCEDURES",
+            "SELECT PROCEDURE_NAME FROM SNOWFLAKE.INFORMATION_SCHEMA.PROCEDURES "
+            "ORDER BY PROCEDURE_NAME",
+        ),
+    ):
+        attempt(
+            item,
+            stmt,
+            lambda res: names_of(res, "name", "procedure_name"),
+        )
+
+    # -- candidate names for the two that are missing --------------------------
+    # READ-ONLY ONLY. Every name here is a GET or a SHOW; no SET_SPENDING_LIMIT
+    # and no notification linking, because both are decisions rather than
+    # diagnosis and neither has been agreed. A name that answers is the real
+    # one; a name that errors costs one row.
     for method in (
-        "GET_SPENDING_LIMIT",
-        "SHOW_BUDGET_DETAILS",
-        "GET_LINKED_NOTIFICATION_INTEGRATION",
-        "GET_SPENDING_HISTORY",
+        "GET_EMAIL_NOTIFICATIONS",
+        "GET_NOTIFICATION_INTEGRATION",
+        "SHOW_RESOURCES",
+        "GET_RESOURCES",
+        "GET_DETAILS",
+        "SHOW_DETAILS",
     ):
         attempt(
             "CALL root!{}()".format(method),
@@ -191,8 +258,19 @@ DROP PROCEDURE IF EXISTS LAB.TMP_BUDGET_PROBE();
 -- =============================================================================
 CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_LIMIT();
 
-CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!SHOW_BUDGET_DETAILS();
-
-CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_LINKED_NOTIFICATION_INTEGRATION();
-
 CALL SNOWFLAKE.LOCAL.ACCOUNT_ROOT_BUDGET!GET_SPENDING_HISTORY();
+
+-- A procedure's table return is consumed with RESULT_SCAN, so the 27 rows
+-- above can be rolled up without re-running the call. This is the split that
+-- RM_POC cannot produce: everything other than WAREHOUSE_METERING is spend it
+-- does not see, and the total is directly comparable to its 2.42 credits and
+-- to the 0.3844 attributed in p12_quality_lineage.sql -- which counted query
+-- compute only, excluding idle warehouse time and all serverless.
+SELECT SERVICE_TYPE,
+       ROUND(SUM(CREDITS_SPENT), 6)                    AS CREDITS,
+       COUNT(*)                                        AS DAYS,
+       MIN(MEASUREMENT_DATE)                           AS FIRST_DAY,
+       MAX(MEASUREMENT_DATE)                           AS LAST_DAY
+FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))
+GROUP BY SERVICE_TYPE
+ORDER BY CREDITS DESC;
