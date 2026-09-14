@@ -359,7 +359,17 @@ and it is the one that earns its place: `scripts/sqllint.sh` catches the four mi
 that actually cost this project time — reserved words used as column aliases, a
 delimiter collision inside a stored procedure, an unqualified drop after an application
 package, and a double-escaped newline. **Every error this project paid for was a parse
-or naming mistake a machine can see.**
+or naming mistake a machine can see.** A fifth check was added afterwards and looks
+forward rather than back: every file in `sql/` must be either a numbered build step or
+explicitly listed as excluded, and every build step must point at a file that exists.
+A rename that misses the manifest would otherwise break a rebuild months later and
+without a sound.
+
+The account can be removed and rebuilt. `sql/teardown.sql` drops everything the project
+created, account-wide and in the order the dependencies require — the assignment before
+the resource monitor, the Iceberg table before the external volume, the stages before
+the storage integration. `scripts/rebuild.sh` walks the 55 steps back up. Eleven of them
+stop for a human, because eleven of them are a consent screen, a UI, or a token.
 
 ### Cost
 
@@ -493,23 +503,42 @@ private keys are excluded from version control.
 | `sql/p13_*` | Outbound surfaces, the protection audit, the share |
 | `sql/p14_*` | Git integration, deploy, the clone question |
 | `sql/p15_cost.sql` | What the whole thing cost, from four instruments |
+| `sql/teardown.sql` | Removes every object, account-wide, in dependency order |
 | `sql/deploy/` | Files written for deploy-from-git. **No session statements** |
 | `dbt/` | 9 models, 42 tests, version-controlled seeds |
 | `streamlit/app.py` | The console. Detects its own runtime features |
 | `source/` | Container stack, database schema, data generators, CDC config |
-| `scripts/` | Cloud provisioning, connectors, runners |
+| `scripts/rebuild.sh` | **Teardown and rebuild.** Carries the build order |
+| `scripts/lib.sh` | What every script was repeating. Sourced, never run |
 | `scripts/sqllint.sh` | **Run before running SQL** |
 | `scripts/sql.sh` | Runs a SQL file, prints results and errors only |
+| `scripts/upload_source.sh` | Generates a dataset and uploads it to a container |
+| `scripts/run_in_container.sh` | Python steps whose wheels do not exist for this Mac |
+
+Twenty-one of the 58 files in `sql/` are not build steps — probes, diagnostics,
+reprints and the teardown — and nothing in a directory listing says which is
+which. `scripts/rebuild.sh plan` is the answer: 55 numbered steps, and the
+twenty-one excluded files named underneath.
 
 ### Running it
 
 ```bash
-cd source && docker compose up -d      # the operational source and broker
+scripts/rebuild.sh plan                # the build order. Runs nothing
+scripts/rebuild.sh status              # what exists in the account. Free
+scripts/rebuild.sh build               # walk the plan, halting at each gate
+scripts/rebuild.sh teardown            # remove everything, behind a confirm gate
+
 scripts/sqllint.sh                     # lint every SQL file
 scripts/sql.sh sql/p15_cost.sql        # run one, results only
 scripts/dbt.sh build                   # transformations and tests
-scripts/p11_deploy.sh                  # ship a console change
 ```
+
+**A full rebuild is not unattended, and nothing could make it so.** Eleven of the
+55 steps need a person somewhere that is not a terminal — an Azure tenant
+administrator consenting to a service principal, a Marketplace listing accepted
+in a UI, a budget activated through a screen that has no SQL equivalent on this
+account. `build` runs every step that can be run, stops at each gate with the
+instruction and the command to resume, and never pretends a gate was cleared.
 
 ---
 

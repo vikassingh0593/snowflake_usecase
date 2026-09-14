@@ -18,7 +18,7 @@ Note the key format against scripts/p4_rest_ingest.py: snowflake-ingest 1.0.x
 wants a PEM *string*, this connector wants DER *bytes*. Same key pair, same
 account, two different expectations.
 
-  bash scripts/p6_pandas_run.sh          run it in a container (recommended)
+  bash scripts/run_in_container.sh pandas   run it in a container (recommended)
   python scripts/p6_write_pandas.py      run it locally, if you have arm64 python
 
 Auth is the SVC_KAFKA key pair. No password anywhere.

@@ -17,14 +17,20 @@
 #   4. Backslash escapes inside a Python procedure body that are meant to reach
 #      SQL as real characters. "\n" written in a heredoc arrives as two
 #      characters, not a newline.
+#   5. A file in sql/ that scripts/rebuild.sh has never heard of, or a build
+#      step pointing at a file that no longer exists. The manifest in
+#      rebuild.sh is the only record of which of these files are build steps,
+#      so a rename that misses it breaks a rebuild months later and silently.
+#      Corpus-level, so it runs only on a full lint.
 #
 #   scripts/sqllint.sh                 lint every file in sql/
 #   scripts/sqllint.sh sql/p13_x.sql   lint one
 #
 set -uo pipefail
 
+ARGC=$#
 FILES=("$@")
-if [ ${#FILES[@]} -eq 0 ]; then
+if [ "$ARGC" -eq 0 ]; then
     FILES=(sql/*.sql)
 fi
 
@@ -73,7 +79,31 @@ for f in "${FILES[@]}"; do
     fi
 done
 
+# 5. Every file in sql/ is either a build step or explicitly excluded, and
+#    every build step exists. Only meaningful over the whole corpus.
+if [ "$ARGC" -eq 0 ] && [ -f scripts/rebuild.sh ]; then
+    known=$( { grep -oE 'sql/[a-z0-9_]+\.sql' scripts/rebuild.sh | sed 's|^sql/||; s|\.sql$||'
+               sed -n '/^NOT_IN_BUILD=/,/^Each records/p' scripts/rebuild.sh \
+                 | grep -oE '\b(p[0-9]+_[a-z_0-9]+|teardown)\b'; } | sort -u )
+    have=$(ls sql/*.sql | sed 's|^sql/||; s|\.sql$||' | sort -u)
+
+    orphans=$(comm -23 <(echo "$have") <(echo "$known"))
+    if [ -n "$orphans" ]; then
+        echo "scripts/rebuild.sh"
+        echo "  in sql/ but neither a build step nor listed as excluded:"
+        echo "$orphans" | sed 's|^|    sql/|; s|$|.sql|'
+        fail=1
+    fi
+
+    for path in $(grep -oE 'sql/[a-z0-9_]+\.sql' scripts/rebuild.sh | sort -u); do
+        [ -f "$path" ] && continue
+        echo "scripts/rebuild.sh"
+        echo "  build step points at a file that does not exist: $path"
+        fail=1
+    done
+fi
+
 if [ "$fail" -eq 0 ]; then
-    echo "clean: ${#FILES[@]} file(s)"
+    echo "clean: ${#FILES[@]} file(s), and rebuild.sh accounts for all of them"
 fi
 exit "$fail"

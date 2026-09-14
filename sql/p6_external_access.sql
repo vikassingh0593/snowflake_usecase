@@ -35,7 +35,7 @@
 -- three are trial-account gates on capabilities that are not edition features.
 --
 -- PREREQUISITE, when the account is no longer a trial: mechanism 13
--- (scripts/p6_pandas_run.sh) must have run. RAW.DIM_STORE_SEED is where the
+-- (scripts/run_in_container.sh pandas) must have run. RAW.DIM_STORE_SEED is where the
 -- coordinates come from.
 --
 -- COST: resumes WH_TRANSFORM_XS. Eight HTTPS calls, ~800 KB of JSON, flattened

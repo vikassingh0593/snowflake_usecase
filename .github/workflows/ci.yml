@@ -8,7 +8,8 @@ name: ci
 # naming mistake that a machine can see: a reserved word used as a column alias,
 # a dollar pair inside a dollar-quoted body, an unqualified DROP after an
 # application package, a double-escaped newline, a Python procedure body that
-# does not compile.
+# does not compile. It also checks that scripts/rebuild.sh still accounts for
+# every file in sql/, so a rename cannot silently break a rebuild.
 #
 # warehouse runs dbt against a zero-copy clone and needs three secrets. It is
 # skipped rather than failed when they are absent, so a fork or a fresh clone
