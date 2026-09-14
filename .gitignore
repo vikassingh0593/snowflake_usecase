@@ -17,12 +17,21 @@ venv/
 .ipynb_checkpoints/
 .pytest_cache/
 
-# dbt — target and logs only. dbt_packages/ IS committed on purpose:
-# running `dbt deps` inside Snowflake Workspaces needs an external access
-# integration (UNVERIFIED; avoided).
+# dbt. dbt_packages/ was described here as committed on purpose, so that
+# Snowflake Workspaces -- which cannot reach the internet without an external
+# access integration -- could run the project as-is. Nothing in this project
+# runs dbt inside Snowflake: it runs in a pinned container locally and on
+# GitHub Actions, both of which have a network. The justification was for a
+# path that does not exist, and the price was 229 files of third-party code.
+#
+# package-lock.yml IS committed, and is the part that was actually load-bearing:
+# it pins the resolved version, so scripts/dbt.sh and CI install the same
+# dbt_utils. scripts/dbt.sh runs `dbt deps` by itself when dbt_packages/ is
+# absent, so a fresh clone needs no extra step.
 target/
 logs/
 dbt_modules/
+dbt_packages/
 
 # Local data / scratch
 *.log
