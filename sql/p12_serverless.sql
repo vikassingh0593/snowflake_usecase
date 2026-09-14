@@ -55,20 +55,38 @@ SELECT SYSTEM$CLUSTERING_INFORMATION('MART.FCT_ORDER', '(ORDER_ID)')
 -- The ACCOUNT_USAGE view lags hours and is useless for a before-and-after in
 -- a single sitting.
 --
--- PARTITIONS_SCANNED over PARTITIONS_TOTAL is the number that matters. Elapsed
--- time on a warm XS warehouse is mostly noise at this size.
+-- It does NOT carry PARTITIONS_SCANNED. That column is in ACCOUNT_USAGE's
+-- QUERY_HISTORY and this is a different object with a different shape --
+-- the eleventh time in this part I have named a column from the wrong
+-- catalogue view. BYTES_SCANNED is here and is the honest proxy: pruning
+-- shows up as bytes not read.
+--
+-- GET_QUERY_OPERATOR_STATS does report pruning precisely and in near-real
+-- time, so it is queried with SELECT * rather than by naming keys I have not
+-- seen. STEP 1 has in any case already answered the question:
+-- total_partition_count is 1.
 -- =============================================================================
 SELECT COUNT(*) AS found, MAX(ORDER_TOTAL_PAISE) AS total_paise
 FROM   MART.FCT_ORDER
 WHERE  ORDER_ID = 909089;
 
-SELECT QUERY_ID, PARTITIONS_SCANNED, PARTITIONS_TOTAL,
-       EXECUTION_TIME AS exec_ms, BYTES_SCANNED
+SET before_id = (
+  SELECT QUERY_ID
+  FROM   TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 10))
+  WHERE  QUERY_TEXT ILIKE '%ORDER_ID = 909089%'
+    AND  QUERY_TEXT NOT ILIKE '%QUERY_HISTORY_BY_SESSION%'
+  ORDER  BY START_TIME DESC
+  LIMIT  1);
+
+SELECT 'before' AS phase, QUERY_ID, EXECUTION_TIME AS exec_ms,
+       BYTES_SCANNED, ROWS_PRODUCED
 FROM   TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 10))
-WHERE  QUERY_TEXT ILIKE '%ORDER_ID = 909089%'
-  AND  QUERY_TEXT NOT ILIKE '%QUERY_HISTORY_BY_SESSION%'
-ORDER  BY START_TIME DESC
-LIMIT  1;
+WHERE  QUERY_ID = $before_id;
+
+-- SELECT *, because the shape of this one has not been seen yet and guessing
+-- at it is what produced the error this statement replaces.
+SELECT *
+FROM   TABLE(GET_QUERY_OPERATOR_STATS($before_id));
 
 -- =============================================================================
 -- STEP 3 — build search optimization, measure, and drop it.
@@ -89,13 +107,21 @@ SELECT COUNT(*) AS found, MAX(ORDER_TOTAL_PAISE) AS total_paise
 FROM   MART.FCT_ORDER
 WHERE  ORDER_ID = 909090;
 
-SELECT QUERY_ID, PARTITIONS_SCANNED, PARTITIONS_TOTAL,
-       EXECUTION_TIME AS exec_ms, BYTES_SCANNED
+SET after_id = (
+  SELECT QUERY_ID
+  FROM   TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 10))
+  WHERE  QUERY_TEXT ILIKE '%ORDER_ID = 909090%'
+    AND  QUERY_TEXT NOT ILIKE '%QUERY_HISTORY_BY_SESSION%'
+  ORDER  BY START_TIME DESC
+  LIMIT  1);
+
+SELECT 'after' AS phase, QUERY_ID, EXECUTION_TIME AS exec_ms,
+       BYTES_SCANNED, ROWS_PRODUCED
 FROM   TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 10))
-WHERE  QUERY_TEXT ILIKE '%ORDER_ID = 909090%'
-  AND  QUERY_TEXT NOT ILIKE '%QUERY_HISTORY_BY_SESSION%'
-ORDER  BY START_TIME DESC
-LIMIT  1;
+WHERE  QUERY_ID = $after_id;
+
+SELECT *
+FROM   TABLE(GET_QUERY_OPERATOR_STATS($after_id));
 
 -- Gone. Not left for later, not left "just to see" -- this is the statement
 -- the whole file exists to reach.
