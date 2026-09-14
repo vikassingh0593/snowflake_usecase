@@ -6,7 +6,7 @@
 --   SELECT "name" AS STORED_OBJECT, "rows" AS ROWS, "kind" AS KIND
 --   001003: syntax error line 1 at position 42 unexpected 'ROWS'
 --
--- ROWS is reserved, and docs/PROGRESS.md already records it: "snow sql
+-- ROWS is reserved, and the build log already recorded it: "snow sql
 -- reserved-word aliases hit twice: rows and check." A documented lesson,
 -- repeated. scripts/sqllint.sh now catches it, along with a literal dollar pair
 -- inside a dollar-quoted body, an unqualified DROP in a file that creates an
@@ -20,7 +20,7 @@
 --   SELECT  TABLE   QCOMMERCE.MART.DIM_CUSTOMER
 --   USAGE   SCHEMA  QCOMMERCE.MART
 --
--- QC_ANALYST HAS DIRECT SELECT ON MART BASE TABLES. docs/OVERVIEW.md §11 says
+-- QC_ANALYST HAS DIRECT SELECT ON MART BASE TABLES. The access model said
 -- that role has "SERVE and SEMANTIC views only. No base-table access
 -- anywhere." False since Part 8. The policies do protect those tables -- that
 -- is why Part 12's role verification passed -- but the access statement is

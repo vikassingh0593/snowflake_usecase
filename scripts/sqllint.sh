@@ -3,7 +3,7 @@
 # Catch the four mistakes this project keeps making, before Snowflake does.
 #
 # Each of these has cost at least one round trip, and three of the four are
-# already written down as lessons in docs/PROGRESS.md -- which is the argument
+# already written down as lessons in the build log -- which is the argument
 # for a script rather than a better memory.
 #
 #   1. Reserved words used as column aliases. ROWS and CHECK have each bitten
