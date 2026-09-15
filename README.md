@@ -19,10 +19,17 @@ This platform is where all of that ends up so somebody can do something about it
 
 ```mermaid
 flowchart TB
-    subgraph SRC["Where it comes from"]
+    subgraph SRC["What the platform runs on"]
         S1["Orders and stock<br/>the operational database"]
-        S2["Deliveries as they happen<br/>a stream of events"]
+        S2["Delivery events<br/>every state change on an order"]
         S3["Complaint letters<br/>300 PDFs"]
+        S4["The promise<br/>SLA thresholds the business sets"]
+    end
+
+    subgraph DEMO["Also connected — nothing reads them yet"]
+        S5["Clickstream<br/>52,140 events"]
+        S6["3PL settlement<br/>queried where it sits"]
+        S7["FX rates<br/>mounted, never copied"]
     end
 
     RAW["<b>1 · It arrives</b><br/>stored exactly as it came<br/>nothing corrected, nothing discarded<br/>~548,000 rows · 13 working routes in"]
@@ -35,14 +42,19 @@ flowchart TB
     SERVE["<b>4 · It is published</b><br/>personal details masked<br/>rows filtered by who is asking"]
     APP(["<b>Operations console</b><br/>4 screens, inside the platform"])
     SHARE(["<b>Outbound feed</b><br/>daily performance by store<br/>filtered by which company is asking"])
+    ARCH["Open-format archive<br/>79,038 events<br/>another engine could read it"]
 
     S1 --> RAW
     S2 --> RAW
     S3 --> RAW
+    S4 --> RAW
+    S5 -. "lands and stops" .-> RAW
+    S6 -. "lands and stops" .-> RAW
     RAW --> CORE
+    RAW -. "written, never read back" .-> ARCH
     CORE --> MART
+    CORE --> TXT
     MART --> ML
-    MART --> TXT
     MART --> SERVE
     ML --> SERVE
     TXT --> SERVE
@@ -57,8 +69,9 @@ Three things happen to the data, in order:
    from the systems that produce them, and are stored exactly as they came.
 2. **It is cleaned and agreed.** Duplicates removed, dates made consistent, prices as
    they were *at the time* rather than as they are now. One version everybody uses.
-3. **It is put to work.** Two models read it — one predicts which orders are about to
-   be late, one reads complaint letters and files them by reason — and a small
+3. **It is put to work.** Two models read it, at different depths — the late-delivery
+   model reads the agreed version, the complaint classifier reads the cleaned one,
+   because a letter never needed a dimensional model to be filed by reason. A small
    application puts both in front of the people who act on them.
 
 The fourth step is easy to miss and matters most: **what those people decide is
