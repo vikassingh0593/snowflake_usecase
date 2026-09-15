@@ -44,6 +44,29 @@ GRANT SELECT ON FUTURE VIEWS  IN SCHEMA RAW TO ROLE QC_ENGINEER;
 GRANT SELECT, INSERT ON ALL TABLES    IN SCHEMA OPS TO ROLE QC_ENGINEER;
 GRANT SELECT, INSERT ON FUTURE TABLES IN SCHEMA OPS TO ROLE QC_ENGINEER;
 
+-- CREATE SCHEMA — for Part 14's pull-request clone, and nothing else here
+-- needs it. The warehouse job in .github/workflows/ci.yml clones MART into
+-- MART_CI_<run id>, builds against the copy and drops it, so a pull request
+-- never touches MART. That has required this grant since Part 14 and did not
+-- have it; the job skipped on every run for want of secrets, so the gap cost
+-- nothing until the day they were finally set:
+--
+--   003001 (42501): Insufficient privileges to operate on database
+--   'QCOMMERCE'. Your primary role QC_ENGINEER must have CREATE SCHEMA
+--   granted on DATABASE QCOMMERCE.
+--
+-- WHY NOT AVOID THE GRANT. Building pull requests into a fixed schema created
+-- once by ACCOUNTADMIN needs no privilege at all, and loses the property the
+-- clone exists for: a clone inherits the row access policy of its source --
+-- measured in sql/p14_git.sql, where clone_carries_row_access_policy passes --
+-- while a fresh build inherits nothing. Pull requests would then be tested
+-- against unprotected data, which is the failure Part 13 is about.
+--
+-- WHAT IT WIDENS, precisely: QC_ENGINEER may create schemas in QCOMMERCE. It
+-- gains nothing in SERVE, GOV or the share, so the reason CI is not allowed to
+-- deploy sql/deploy/ still holds.
+GRANT CREATE SCHEMA ON DATABASE QCOMMERCE TO ROLE QC_ENGINEER;
+
 -- =============================================================================
 -- Verify as the role that was failing, not as ACCOUNTADMIN.
 --
