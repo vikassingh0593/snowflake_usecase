@@ -152,11 +152,20 @@ MANIFEST=(
   THE GATE, and do not go past a failure here -- every Iceberg step depends on it:
       SELECT SYSTEM\$VERIFY_EXTERNAL_VOLUME('EXVOL_QC');"
 "sql|Stages, file formats, RAW tables|sql/p3_prep.sql"
-"gate|Operational source and broker|On the machine with Docker:
-      cd source && docker compose up -d
-  Postgres 16 as the OLTP source, Kafka (Redpanda), Kafka Connect, Debezium.
+"gate|Operational source and broker|On the machine with Docker. The subshell matters: cd source && docker
+  compose up -d leaves the shell inside source/, where source/generate.py is
+  source/source/generate.py and does not exist.
+      (cd source && docker compose up -d)
       python3 source/generate.py
-  Writes the generator output every later step reads."
+  Four services: Postgres 16 as the OLTP source, Kafka (Redpanda), its console,
+  and Kafka Connect carrying Debezium. The generator resolves its output from
+  its own path rather than the working directory, so it writes source/out/ from
+  wherever it is invoked -- it is only the pair above that has to compose.
+
+  docker compose up -d returns as soon as the containers are created, not when
+  Connect is listening, and step 9 posts a connector to localhost:8083. Wait for
+  it or that step fails on a connection refused that looks like a config error:
+      until curl -sf localhost:8083/connectors >/dev/null; do sleep 3; done"
 "shell|Kafka connector plugin|scripts/p3_connector.sh"
 "shell|Sink connector, mechanisms 1 and 3|scripts/p3_sink.sh"
 "shell|Snowpipe Streaming SDK, mechanism 2|scripts/run_in_container.sh stream"
