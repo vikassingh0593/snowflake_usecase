@@ -93,6 +93,12 @@ takes in an operator that actually runs stores, paired with what stands in for i
 write-ahead log into a real broker, and the same Snowflake objects a production
 account would hold.
 
+![Architecture of the quick-commerce analytics platform: the customer app on the left, through change capture and the broker into RAW, CORE, MART and LAB, out to SERVE and the people who act on it](docs/architecture.png)
+
+*Vector original: [`docs/architecture.svg`](docs/architecture.svg). It reads left to
+right, starting where the business starts — a customer tapping pay. The dashed block
+below the rule is the three sources that stop at landing.*
+
 ### A day, and who is in it
 
 At 19:04 a **customer** taps pay. The **order service** writes the row. Nothing else
