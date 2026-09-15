@@ -174,17 +174,47 @@ ALTER WAREHOUSE IF EXISTS SNOWFLAKE_LEARNING_WH SET AUTO_SUSPEND = 60;
 -- -----------------------------------------------------------------------------
 -- 10. Verify
 --
--- Every one of these should come back empty except SHOW WAREHOUSES, which keeps
--- SNOWFLAKE_LEARNING_WH, and SHOW INTEGRATIONS, which keeps
--- SNOWFLAKE$LOCAL_APPLICATION. SHOW INTEGRATIONS has no LIKE that
--- would catch all six prefixes at once, so it is listed whole — read it for
--- anything named GIT_API_, SI_, NI_, EAI_ or TMP_.
+-- A bare SHOW that matches nothing prints no result box at all, so on a clean
+-- account seven of these produced no output and the run gave no way to tell
+-- "empty" from "did not run". Each SHOW is therefore counted through
+-- RESULT_SCAN, which returns a row saying 0 rather than returning nothing.
+--
+-- Every REMAINING should read 0 except the last, which keeps
+-- SNOWFLAKE_LEARNING_WH. SHOW INTEGRATIONS has no LIKE that catches all the
+-- prefixes at once, so its count excludes the vendor object by name instead.
 -- -----------------------------------------------------------------------------
 SHOW DATABASES LIKE 'QC%';
+SELECT 'database' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW WAREHOUSES LIKE 'WH_%';
+SELECT 'warehouse' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW ROLES LIKE 'QC_%';
+SELECT 'role' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW USERS LIKE 'SVC_%';
+SELECT 'user' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW RESOURCE MONITORS;
+SELECT 'resource monitor' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" LIKE 'RM_%';
+
 SHOW SHARES LIKE '%QC%';
+SELECT 'share' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW EXTERNAL VOLUMES;
+SELECT 'external volume' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
+
 SHOW INTEGRATIONS;
+SELECT 'integration' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" NOT LIKE 'SNOWFLAKE$%';
+
+SHOW WAREHOUSES LIKE 'SNOWFLAKE_%';
+SELECT 'vendor warehouse, kept' AS OBJECT, COUNT(*) AS REMAINING
+  FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));
