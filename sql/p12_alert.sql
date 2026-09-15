@@ -96,6 +96,42 @@ SELECT 'zzz_drill_seeded_failure', 'OPS.ALERT_DQ_FAILED', FALSE, 1,
 -- without ever resuming it.
 EXECUTE ALERT OPS.ALERT_DQ_FAILED;
 
+-- ...and returns before the action has run, which STEP 4's own header says and
+-- this file then did not act on. On a rebuild OPS.ALERT_LOG starts empty and
+-- both checks failed: alert_fires_on_a_seeded_failure saw 0 rows, and
+-- no_check_is_currently_failing then counted the False row the first check had
+-- just written. Earlier runs passed because a previous drill's row was still in
+-- ALERT_LOG -- the check was reading old evidence, not new.
+--
+-- Poll rather than sleep a fixed interval: the action usually lands in a few
+-- seconds and occasionally does not. A Python procedure because every other
+-- procedural block in this repo is one, and TMP_ keeps sqllint check 7 quiet.
+CREATE OR REPLACE PROCEDURE OPS.TMP_ALERT_WAIT()
+RETURNS STRING
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.11'
+PACKAGES = ('snowflake-snowpark-python')
+HANDLER = 'run'
+AS
+$$
+import time
+
+def run(session):
+    for waited in range(0, 90, 3):
+        n = session.sql(
+            "SELECT COUNT(*) FROM OPS.ALERT_LOG "
+            "WHERE CHECK_NAME = 'zzz_drill_seeded_failure'"
+        ).collect()[0][0]
+        if n:
+            return "action landed after about {}s, {} row(s)".format(waited, n)
+        time.sleep(3)
+    return "TIMEOUT: nothing in ALERT_LOG after 90s -- the action did not run"
+$$;
+
+CALL OPS.TMP_ALERT_WAIT();
+
+DROP PROCEDURE IF EXISTS OPS.TMP_ALERT_WAIT();
+
 -- =============================================================================
 -- STEP 4 — did it fire.
 --

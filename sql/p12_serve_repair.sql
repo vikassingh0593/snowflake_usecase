@@ -276,7 +276,13 @@ WITH dt AS (
     SELECT STATE, REFRESH_START_TIME
     FROM   TABLE(INFORMATION_SCHEMA.DYNAMIC_TABLE_REFRESH_HISTORY(
                NAME => 'QCOMMERCE.SERVE.SLA_STORE_HOUR_AGG'))
-    QUALIFY ROW_NUMBER() OVER (ORDER BY REFRESH_START_TIME DESC) = 1
+    -- NULLS LAST, because DESC is NULLS FIRST in Snowflake and a refresh that
+    -- never started has no REFRESH_START_TIME. The teardown drops
+    -- WH_TRANSFORM_XS, so a scheduled refresh lands as FAILED 002725
+    -- "warehouse is missing" with a null start time -- and that row then sorted
+    -- ahead of every real refresh and became "the latest". The giveaway was
+    -- DETAIL printing as None: STATE || ' at ' || NULL is NULL.
+    QUALIFY ROW_NUMBER() OVER (ORDER BY REFRESH_START_TIME DESC NULLS LAST) = 1
 ),
 agg AS (
     SELECT COUNT(*) AS N, SUM(ORDERS) AS ORDERS FROM SERVE.SLA_STORE_HOUR_AGG
