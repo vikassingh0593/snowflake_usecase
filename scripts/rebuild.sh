@@ -234,9 +234,26 @@ MANIFEST=(
   notifications, and a blob already sitting in landing/ raises none."
 "sql|Directory table over the PDFs, mechanism 10|sql/p6_directory_docs.sql"
 "sql|External network access, mechanism 11|sql/p6_external_access.sql"
-"gate|Marketplace listing|Snowsight -> Data Products -> Marketplace. Acquire the free
-  listing named in sql/p6_marketplace.sql and mount it as QC_MARKETPLACE. There
-  is no SQL that accepts a listing's terms on your behalf."
+"gate|Marketplace listing|CHECK FIRST. sql/teardown.sql drops QCOMMERCE and QC_PROBE_TMP and no
+  other database, so a mount acquired by a previous build is still there and
+  this gate is a no-op, like gates 18 and 20:
+      snow sql -c qcpoc -q \"SHOW DATABASES LIKE 'FINANCE%'\" --format csv
+  A row whose kind is IMPORTED DATABASE and whose origin names another account
+  is the zero-copy mount. Go to step 24.
+
+  Otherwise, in Snowsight -> Data Products -> Marketplace:
+      search   Finance & Economics    (Snowflake Public Data Products,
+                                       formerly Cybersyn. Free, no trial)
+      Get      database FINANCE__ECONOMICS, which is the name
+               sql/p6_marketplace.sql expects
+      grant    query access to QC_ENGINEER and QC_ANALYST
+  There is no SQL that accepts a listing's terms on your behalf.
+
+  Any free listing exercises the same mechanism; this one is the pick because
+  it carries FX rates, and every amount in this platform is whole paise. If it
+  has been renamed, step 24 discovers what actually arrived and only two
+  identifiers change. Mind the warning in that file: a shared table can be
+  enormous, and SELECT * against one is the cheapest way to be surprised."
 "sql|Marketplace join, mechanism 12|sql/p6_marketplace.sql"
 "shell|write_pandas, mechanism 13|scripts/run_in_container.sh pandas"
 "gate|CDC|Debezium has to be pointed at a source that has moved:
