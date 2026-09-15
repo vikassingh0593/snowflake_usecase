@@ -553,10 +553,40 @@ cmd_build() {
             note "fix it, then: scripts/rebuild.sh build --from $i"
             exit 1
         }
+
+        # A step that exits 0 having written a failing row to OPS.DQ_RESULTS has
+        # not passed, and until now was ticked green anyway. Steps 48 and 49 both
+        # did that on 2026-09-15 -- an alert drill that read its own log before
+        # the alert had run, and a refresh check that picked a null-timestamped
+        # row as the newest. Only sql and dbt steps write checks.
+        if [ "$kind" = sql ] || [ "$kind" = dbt ]; then
+            if ! dq_gate; then
+                warn "step $i failed a check it wrote: $label"
+                note "$DQ_FAILURES"
+                note "the step itself exited 0 -- this is OPS.DQ_RESULTS, not the exit code"
+                note "fix it, then: scripts/rebuild.sh build --from $i"
+                exit 1
+            fi
+        fi
+
         ok "$label"
     done
 
     step "reached step $to"
+
+    # The check gate degrades to silence when it cannot read OPS.DQ_RESULTS --
+    # which is correct for the early steps, before anything has created it, and
+    # indistinguishable from a connection that can never read it. Saying so once
+    # here is the difference between "every check passed" and "no check was ever
+    # looked at", which otherwise look identical from the outside.
+    if [ "$DQ_WATERMARK" = "1900-01-01 00:00:00.000" ]; then
+        warn "the check gate never read a row from OPS.DQ_RESULTS"
+        note "no step was judged on its checks, only on its exit code"
+        note "expected when the run stopped before the table exists; otherwise"
+        note "confirm the connection has a default warehouse:"
+        note "  snow sql -c $CONN -q 'SELECT COUNT(*) FROM $DB.OPS.DQ_RESULTS'"
+    fi
+
     [ "$to" -lt "${#MANIFEST[@]}" ] \
         && note "continue with: scripts/rebuild.sh build --from $((to + 1))" \
         || ok "build complete — scripts/rebuild.sh status to confirm"
