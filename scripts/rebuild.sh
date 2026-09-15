@@ -185,9 +185,10 @@ MANIFEST=(
   anything:
       docker exec qc-redpanda rpk topic describe -p qc.order_status
   A high watermark near 79,663 means it survived and step 10 will consume it. If
-  the topic is gone -- a genuinely fresh volume, or a past docker compose down -v
-  -- produce it from the generator output. UNVERIFIED, written from rpk's
-  documented interface rather than from a run:
+  the topic is gone, produce it from the generator output. Expect it to be gone
+  on any account where Part 7 has run: p7_source_reset.sh deletes this topic and
+  says so under WHAT IS NOT RECOVERED, so a teardown is not what loses it.
+  Verified on rpk in this stack -- ten records first, then the rest:
       docker exec qc-redpanda rpk topic create qc.order_status -p 3
       docker exec -i qc-redpanda rpk topic produce qc.order_status \\
         < source/out/order_status.ndjson"
