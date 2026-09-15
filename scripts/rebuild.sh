@@ -233,10 +233,27 @@ MANIFEST=(
   again. Gate 13 is the exception: Snowpipe auto-ingest fires on Event Grid
   notifications, and a blob already sitting in landing/ raises none."
 "sql|Directory table over the PDFs, mechanism 10|sql/p6_directory_docs.sql"
-"sql|External network access, mechanism 11|sql/p6_external_access.sql"
-"gate|Marketplace listing|Snowsight -> Data Products -> Marketplace. Acquire the free
-  listing named in sql/p6_marketplace.sql and mount it as QC_MARKETPLACE. There
-  is no SQL that accepts a listing's terms on your behalf."
+"tier|External network access, mechanism 11|sql/p6_external_access.sql :: External access is not supported for trial accounts -- error 509009, SQL state 0A000, raised by CREATE EXTERNAL ACCESS INTEGRATION. The network rule and the secret create successfully; only the integration binding them is refused, which is exactly what README section 11 records as a tier gate. Route 11 cannot be built here. Note that a git API integration to the same public internet IS permitted: different integration type, different gate. Continue to step 23."
+"gate|Marketplace listing|CHECK FIRST. sql/teardown.sql drops QCOMMERCE and QC_PROBE_TMP and no
+  other database, so a mount acquired by a previous build is still there and
+  this gate is a no-op, like gates 18 and 20:
+      snow sql -c qcpoc -q \"SHOW DATABASES LIKE 'FINANCE%'\" --format csv
+  A row whose kind is IMPORTED DATABASE and whose origin names another account
+  is the zero-copy mount. Go to step 24.
+
+  Otherwise, in Snowsight -> Data Products -> Marketplace:
+      search   Finance & Economics    (Snowflake Public Data Products,
+                                       formerly Cybersyn. Free, no trial)
+      Get      database FINANCE__ECONOMICS, which is the name
+               sql/p6_marketplace.sql expects
+      grant    query access to QC_ENGINEER and QC_ANALYST
+  There is no SQL that accepts a listing's terms on your behalf.
+
+  Any free listing exercises the same mechanism; this one is the pick because
+  it carries FX rates, and every amount in this platform is whole paise. If it
+  has been renamed, step 24 discovers what actually arrived and only two
+  identifiers change. Mind the warning in that file: a shared table can be
+  enormous, and SELECT * against one is the cheapest way to be surprised."
 "sql|Marketplace join, mechanism 12|sql/p6_marketplace.sql"
 "shell|write_pandas, mechanism 13|scripts/run_in_container.sh pandas"
 "gate|CDC|EVERY ONE OF THESE DEFAULTS TO A DRY RUN OR A READ. Without the
@@ -351,8 +368,9 @@ cmd_plan() {
             printf '  %2d  %sGATE%s  %s\n' "$i" "$_Y" "$_0" "$label"
             continue
         fi
-        local shown="$payload"
+        local shown="${payload%% :: *}"
         [ "$kind" = dbt ] && shown="scripts/dbt.sh $payload"
+        [ "$kind" = tier ] && shown="$shown   (expected to be refused)"
         printf '  %2d  %-5s %s\n          %s%s%s\n' \
                "$i" "$(printf '%s' "$kind" | tr '[:lower:]' '[:upper:]')" \
                "$label" "$_D" "$shown" "$_0"
@@ -462,6 +480,22 @@ cmd_build() {
                 dbt)   note "scripts/dbt.sh $payload" ;;
                 shell) note "$payload" ;;
             esac
+            continue
+        fi
+
+        # A tier step is one this account is known to refuse. Its payload carries
+        # the reason after " :: " so the refusal reads as a recorded limitation
+        # rather than a build failure. If it ever succeeds, say so -- that means
+        # the account changed and README section 11 is out of date.
+        if [ "$kind" = tier ]; then
+            if snow_file "${payload%% :: *}"; then
+                ok "$label"
+                warn "this step was expected to be refused on this account and was not"
+                note "README section 11 needs updating"
+            else
+                warn "$label — refused, and expected to be"
+                note "${payload#* :: }"
+            fi
             continue
         fi
 
