@@ -491,10 +491,52 @@ The merge build is tagged `p14:cd_dbt` and the pull-request build `p14:ci_dbt`, 
 `sql/p15_cost.sql` attributes credits by tag prefix, and a rehearsal against a copy is
 not the same spend as a merge changing the real mart.
 
-**The job is inert until three repository secrets exist.** It gates on
-`SNOWFLAKE_ACCOUNT` exactly as `warehouse` does, and skips cleanly without it — verified
-on the merge that added it: gate `success`, every step after it `skipped`, nothing
-deployed. Setting the secrets is what arms it.
+### CI/CD is live, and the first armed run found a privilege nobody had granted
+
+Both account-facing jobs gate on a `SNOWFLAKE_ACCOUNT` repository secret and skip
+cleanly without it, so a fork gets the useful half with no configuration. That gate held
+for months — and it is also why **`warehouse` had never executed once since Part 14.**
+The first run with the secrets set failed on the step that clones the mart:
+
+```
+003001 (42501): Insufficient privileges to operate on database 'QCOMMERCE'.
+Your primary role QC_ENGINEER must have CREATE SCHEMA granted on DATABASE QCOMMERCE.
+```
+
+**The clone-per-pull-request design had always required that grant and never had it.**
+Key-pair auth, the role, the warehouse and the account identifier all resolved; only the
+`CREATE SCHEMA` was refused. `sql/p8_grants.sql` now carries it, so a teardown does not
+put the next rebuild back on the same error:
+
+```sql
+GRANT CREATE SCHEMA ON DATABASE QCOMMERCE TO ROLE QC_ENGINEER;
+```
+
+Building pull requests into a fixed schema instead would need no grant and lose the
+property the clone exists for — a clone inherits the row access policy of its source,
+measured in `sql/p14_git.sql`, where `clone_carries_row_access_policy` passes. A fresh
+build inherits nothing, so pull requests would be tested against unprotected data. The
+grant widens `QC_ENGINEER` to creating schemas in `QCOMMERCE` and nothing in `SERVE`,
+`GOV` or the share, so the reason CI may not deploy `sql/deploy/` is untouched.
+
+**Measured on the first green run**, and read from what the jobs did rather than from
+their exit codes:
+
+| Job | Result | Built into |
+|---|---|---|
+| `lint` | success | — |
+| `warehouse` | `PASS=61 ERROR=0` in 13.4s | `MART_CI_<run id>`, dropped after |
+| `deploy` | `PASS=61 ERROR=0` in 14.3s | `MART` |
+
+`OK created sql table model MART_CI_35006122489.fct_order_item … SUCCESS 54635` is the
+line that settles it: the run-id clone rather than `MART`, and not `RAW_MART_CI_…`, so
+`DBT_TARGET_SCHEMA`, the `ci` target and `macros/generate_schema_name.sql` all did what
+they claimed. 54,635 rows is the order-line count from §3 — the clone carried real data.
+
+**Four defects in this workflow were found by reading it and one by running it.** The
+missing `dbt deps`, the `ci` target that did not exist, `DBT_TARGET_SCHEMA` read by
+nothing, and `DBT_KEY_PATH` pointing at a container mount were all visible on the page.
+The missing grant was not, and nothing but an execution would have surfaced it.
 
 The account can be removed and rebuilt. `sql/teardown.sql` drops everything the project
 created, account-wide and in the order the dependencies require — the assignment before
