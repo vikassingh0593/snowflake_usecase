@@ -25,7 +25,7 @@ flowchart TB
         S3["Complaint letters<br/>300 PDFs"]
     end
 
-    RAW["<b>1 · It arrives</b><br/>stored exactly as it came<br/>nothing corrected, nothing discarded<br/>~548,000 rows · 13 ways in"]
+    RAW["<b>1 · It arrives</b><br/>stored exactly as it came<br/>nothing corrected, nothing discarded<br/>~548,000 rows · 13 working routes in"]
     CORE["<b>2 · It is cleaned</b><br/>duplicates removed, dates made consistent<br/>prices as they were at the time<br/>270,797 rows"]
     MART["<b>3 · It is agreed</b><br/>one version everybody uses<br/>9 tables · 42 automated tests"]
 
@@ -78,7 +78,7 @@ recipient sees is decided by who is asking**.
 |---|---|---|
 | Which orders in flight will breach their promise? | Dispatcher | Risk queue, §6 |
 | Which stores miss their promise, at which hours? | Operations | Store heatmap, §7 |
-| Why did the on-time rate move? | Regional management | The dimensional model, §5 |
+| Why did the on-time rate move? | Regional management | The dimensional model, §4 |
 | How much stock will each store need? | Supply planning | Daily stock snapshots |
 | What are customers complaining about? | Customer experience | Triage queue, §6 |
 | Who may see customer contact details? | Compliance | The protection layer, §8 |
@@ -138,11 +138,92 @@ Boundary test: expressible in SQL → dbt owns it. Needs scikit-learn or row-wis
 
 ---
 
-## 5. How data gets in — 13 routes
+## 5. The sources, and how data gets in
 
-Thirteen genuinely different mechanisms, because each exists where the others are
-wrong. A partner will not change their file schedule; a dataset someone is willing to
-share should not be copied.
+### Seven sources. Fourteen routes. Those are different numbers.
+
+A *source* is something the business has. A *route* is a way of moving it. Three of the
+routes below carry the **same** delivery events on purpose so they can be compared, and
+one route is refused by this account entirely.
+
+| # | Business source | Who owns it | Lands as | Reaches `MART`? |
+|---|---|---|---|---|
+| 1 | **Orders and stock** — the app's own live database | You | `RAW.CDC_ORDERS`, `CDC_ORDER_ITEMS`, `CDC_CUSTOMERS`, `CDC_PRODUCTS`, `CDC_RIDERS`, `CDC_DARK_STORES`, `CDC_INVENTORY` | **yes** |
+| 2 | **Delivery status events** — every state change on an order | You | `RAW.ORDER_STATUS_KAFKA_V4`, `ORDER_STATUS_SDK`, `ORDER_STATUS_KAFKA_V3FILE` | **yes** (one of the three) |
+| 3 | **The promise** — SLA thresholds, category tree, reason codes | The business *decides* these | `RAW.SLA_THRESHOLD`, `CATEGORY_HIERARCHY`, `COMPLAINT_REASON_CODE`, `COMPLAINT_LABEL` | **yes**, joined |
+| 4 | **Complaint letters** — free prose from customers | Customers | `RAW.COMPLAINT_DOC` | to `LAB`, not `MART` |
+| 5 | **Clickstream** — app and web behaviour | You | `RAW.CLICKSTREAM_AUTO`, `CLICKSTREAM_REST` | **no — stops at `RAW`** |
+| 6 | **3PL settlement** — the logistics partner's own account | The partner | `RAW.EXT_SETTLEMENT` — queried where it sits, never loaded | **no — stops at `RAW`** |
+| 7 | **FX rates** — bought reference data | A data vendor | `FINANCE__ECONOMICS` — mounted, nothing copied | **no — read live** |
+
+**Sources 5, 6 and 7 terminate at landing, and that is deliberate.** They exist to prove
+the mechanism — an event queue that wakes the warehouse, a partner file reconciled
+rather than trusted, a dataset read without copying it. None of them has a consumer
+today. Saying so is the difference between a platform and a demonstration, and this is
+both: **sources 1 to 4 are the platform; 5 to 7 are the demonstration.**
+
+The Iceberg archive (`RAW.ORDER_EVENTS_ICEBERG`) is the same — 79,038 events written in
+an open format that another engine could read. Nothing in this project reads it back.
+
+### The same thing, at each layer
+
+Read left to right to follow any business object through the platform.
+
+| The business thing | Arrives as | Cleaned into | Published as |
+|---|---|---|---|
+| An order | `RAW.CDC_ORDERS` | `CORE.ORDER_HEADER` | `MART.FCT_ORDER` |
+| A line on that order | `RAW.CDC_ORDER_ITEMS` | `CORE.ORDER_ITEM` | `MART.FCT_ORDER_ITEM` |
+| What happened to it | `RAW.ORDER_STATUS_KAFKA_V4` | `CORE.ORDER_STATUS_EVENT` | `MART.FCT_ORDER_STATUS_EVENT` |
+| The customer | `RAW.CDC_CUSTOMERS` | `CORE.CUSTOMER` | `MART.DIM_CUSTOMER` |
+| The store | `RAW.CDC_DARK_STORES` | `CORE.STORE` | `MART.DIM_STORE` |
+| The rider | `RAW.CDC_RIDERS` | `CORE.RIDER` | `MART.DIM_RIDER` |
+| The product, **and its price history** | `RAW.CDC_PRODUCTS` | `CORE.PRODUCT` (now) + `CORE.DIM_PRODUCT` (every version) | `MART.DIM_PRODUCT` |
+| Stock on hand | `RAW.CDC_INVENTORY` | `CORE.INVENTORY_DAILY` | `MART.FCT_INVENTORY_DAILY` |
+| A complaint | `RAW.COMPLAINT_DOC` | `CORE.COMPLAINT` | `LAB.COMPLAINT_PREDICTION` → `SERVE.COMPLAINT_TRIAGE` |
+
+`CORE` also produces three tables with no `RAW` source of their own, because they are
+**conclusions** rather than records — what the event stream means once read in order:
+
+| | Holds | Rows |
+|---|---|---|
+| `CORE.ORDER_FUNNEL` | orders that went placed → packed → picked up → delivered, cleanly | 19,029 |
+| `CORE.ORDER_CANCELLED` | orders that stopped, and how far they got first | 623 |
+| `CORE.ORDER_LIFECYCLE_ANOMALY` | orders whose events arrived out of order or skipped a step | 348 |
+
+Those three sum to 20,000 — every order, in exactly one of them.
+
+### Following one late order, end to end
+
+**A worked example.** The object names, the thresholds and the table counts are real.
+The one order's own figures — 19:04, 18 minutes promised, 26 delivered, 0.23 and 0.31 —
+are illustrative, chosen to show the path rather than measured from a specific row.
+
+1. A customer orders at 19:04. The row appears in the operational database and change
+   capture carries it to `RAW.CDC_ORDERS` within seconds, **exactly as written** —
+   no cleaning, nothing discarded.
+2. `RAW.SLA_THRESHOLD` says that store, at that hour, promises 18 minutes. **The promise
+   is data, not code.**
+3. The order is packed, picked up, delivered. Four events land in
+   `RAW.ORDER_STATUS_KAFKA_V4`. One is a duplicate — the broker delivers at least once —
+   and it stays, because `RAW` never dedupes.
+4. `CORE.ORDER_STATUS_EVENT` resolves the duplicate. `CORE.ORDER_FUNNEL` reads the four
+   events in order and finds delivery took 26 minutes against 18 promised.
+5. `MART.FCT_ORDER` records the order as breached, priced at the product's price **at
+   19:04** — from `CORE.DIM_PRODUCT`, not today's price.
+6. The risk model had already scored it at 19:04, from what was knowable then: distance,
+   store load, hour of day. It said 0.23. `SERVE.ORDER_RISK` carries the score and the
+   outcome side by side, which is the only way to find out whether the model was right.
+7. The customer writes in. The letter becomes `RAW.COMPLAINT_DOC`, then
+   `CORE.COMPLAINT`, and the classifier files it as `LATE_DELIVERY` with confidence
+   0.31 — below the 0.235 auto threshold, so `SERVE.COMPLAINT_TRIAGE` routes it to a
+   person rather than an automatic reply.
+8. That person acts. What they decide is written to `SERVE.ACTION_LOG` — **and becomes
+   training data for the next model.** This is the loop closing.
+
+### The fourteen routes
+
+Each exists where the others are wrong. A partner will not change their file schedule; a
+dataset someone is willing to share should not be copied.
 
 | # | Route | Mechanism | Rows |
 |---|---|---|---|
