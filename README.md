@@ -149,7 +149,7 @@ share should not be copied.
 | 1 | Kafka → warehouse, row by row | Kafka connector v4, streaming | 79,663 |
 | 2 | Direct streaming, no broker | Streaming SDK with offset tokens | 79,663 |
 | 3 | Kafka → warehouse, micro-batch | Kafka connector v3, file mode | 79,663 |
-| 4 | Storage notifies the warehouse | Auto-ingest via event queue | 10,051 |
+| 4 | Storage notifies the warehouse | Auto-ingest via event queue | 52,140 |
 | 5 | Client notifies the warehouse | REST `insertFiles`, internal stage | 8,097 |
 | 6 | Bulk historical load | `COPY` with schema inference | 40,000 |
 | 7 | Source schema change absorbed | Schema evolution on `COPY` | +1 column |
