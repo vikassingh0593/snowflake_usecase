@@ -48,9 +48,16 @@ MANIFEST=(
 "gate|Azure foundation|SKIP THIS STEP IF THE STORAGE ACCOUNT ALREADY EXISTS. sql/teardown.sql
   removes nothing in Azure -- the resource group, the storage account, all four
   containers, the Event Grid topic and snowpipe-queue survive a teardown intact,
-  and the blobs already in them are what the rebuild re-ingests. Check first:
+  and the blobs already in them are what the rebuild re-ingests.
+
+  Nothing needs checking to continue: sql/teardown.sql contains no az command at
+  all, and steps 2 and 3 are free DDL. The real check is gate 6's
+  SYSTEM\$VERIFY_EXTERNAL_VOLUME, which fails loudly if the account or the
+  containers are gone, and it comes before anything expensive. To confirm now
+  anyway, do it in Azure Cloud Shell at shell.azure.com -- az is not installed
+  on the Mac and no step in this project needs it there:
       az storage account show --name snowflakeqcpoc25056 -o table
-  If it answers, go straight to step 2.
+  Either way, go to step 2.
 
   Only on a genuinely empty subscription, in Azure Cloud Shell, and read it
   first -- it creates billable Azure resources and asks before each one:
@@ -63,15 +70,20 @@ MANIFEST=(
 "gate|Register the service-user public keys|REUSE THE KEYS YOU ALREADY HAVE. DROP USER removes the registration,
   not the key pair. If rsa_kafka.p8 and rsa_ci.p8 are still in the repo root,
   generating new ones only invalidates dbt/profiles.yml and the connector
-  config for nothing. Generate only if they are missing:
+  config for nothing. Generate only if the .p8 files are missing:
       openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_kafka.p8 -nocrypt
-      openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
       openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_ci.p8 -nocrypt
+
+  Re-derive each public key from its private key before reading it. A missing
+  .pub would otherwise leave K empty and the ALTER below would set a blank key
+  without complaining. openssl writes the same bytes either way, so this is safe
+  whether the .pub is there or not:
+      openssl rsa -in rsa_kafka.p8 -pubout -out rsa_kafka.pub
       openssl rsa -in rsa_ci.p8 -pubout -out rsa_ci.pub
 
-  Re-register both public keys on their TYPE = SERVICE users. The header and
-  footer lines and every newline must come out, which is why this is a command
-  and not a paste:
+  Then re-register both on their TYPE = SERVICE users. The header and footer
+  lines and every newline must come out, which is why this is a command and not
+  a paste:
       K=\$(grep -v -- '-----' rsa_kafka.pub | tr -d '\\n')
       snow sql -c qcpoc -q \"ALTER USER SVC_KAFKA SET RSA_PUBLIC_KEY = '\$K'\"
       K=\$(grep -v -- '-----' rsa_ci.pub | tr -d '\\n')
