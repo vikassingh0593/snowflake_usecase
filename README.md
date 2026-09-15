@@ -85,20 +85,79 @@ recipient sees is decided by who is asking**.
 
 ---
 
-## 2. What it answers
+## 2. How this runs in a real company
 
-| Question | Who asks it | Where the answer comes from |
+**Nothing here is a live business.** Every chain below is the shape this platform
+takes in an operator that actually runs stores, paired with what stands in for it.
+**The data is generated. The mechanisms are real** — a real Debezium reading a real
+write-ahead log into a real broker, and the same Snowflake objects a production
+account would hold.
+
+### A day, and who is in it
+
+At 19:04 a **customer** taps pay. The **order service** writes the row. Nothing else
+in the company learns about that order by being told — they learn by reading what the
+order service wrote, which is the entire reason for the first chain below.
+
+Minutes later a **picker** packs it and a **rider** collects it, each tap on the rider
+app emitting one event. A **dispatcher** watching the evening peak sees the order rise
+up a risk queue before it is late, and moves a rider. Overnight the **analytics
+engineers'** models rebuild, and by morning an **ops manager** can see which store and
+which hour the misses cluster in. A week on, a **CX agent** reads the customer's
+complaint already filed under a reason code. A **partner** receives only its own
+stores' numbers. **Compliance** can ask who is able to read the customer's phone
+number, and get an answer by signing in rather than by reading a grant.
+
+### The chains
+
+| Flow | Real world |
+|---|---|
+| Orders, stock, customers, riders | customer app → order service → OLTP database → **Debezium** reads the write-ahead log → **Kafka** → **Snowflake Kafka connector v4 (Snowpipe Streaming)** → `RAW.CDC_*` |
+| Delivery status | rider app tap → dispatch service → Kafka topic → sink connector → `RAW.ORDER_STATUS_*` |
+| Same events, no broker | backend service → **Snowpipe Streaming SDK**, channels and offset tokens → `RAW.ORDER_STATUS_SDK` |
+| Clickstream | analytics SDK → collector writes hourly gzipped NDJSON to blob → **Event Grid** → **storage queue** → Snowpipe auto-ingest → `RAW.CLICKSTREAM_AUTO` |
+| Complaints | customer writes to support → helpdesk exports the letter as PDF → blob → directory table → `pypdf` UDF → `RAW.COMPLAINT_DOC` |
+| 3PL settlement | logistics partner drops a daily CSV in a shared container → external table, **queried where it sits** → reconciled against your own orders |
+| Business rules | ops or CX decide a promise or a reason code → pull request → dbt seed with tests → `RAW.SLA_THRESHOLD` |
+| Decisions back | dispatcher acts in the console → `SERVE.ACTION_LOG` → training data for the next model |
+
+### Real world, and what stands in for it here
+
+| Piece | Real world | In this PoC |
 |---|---|---|
-| Which orders in flight will breach their promise? | Dispatcher | Risk queue, §6 |
-| Which stores miss their promise, at which hours? | Operations | Store heatmap, §7 |
-| Why did the on-time rate move? | Regional management | The dimensional model, §4 |
-| How much stock will each store need? | Supply planning | Daily stock snapshots |
-| What are customers complaining about? | Customer experience | Triage queue, §6 |
-| Who may see customer contact details? | Compliance | The protection layer, §8 |
+| OLTP database | managed Postgres, the order service's own | **Postgres 16 in Docker**, loaded from `generate.py` CSVs by `02_load.sh` |
+| Change capture | Debezium source connector on Kafka Connect, `pgoutput` | the same, `debezium/connect:2.7.3.Final`, publication `qc_pub`, slot `qc_slot` |
+| Broker | managed Kafka | **Redpanda**, a Kafka-API-compatible broker, in the same compose file |
+| Application writes | the order service updating a row as the business moves | `p7_mutate_source.sh` — without a real `UPDATE` there is no before-image to version |
+| Delivery events | rider app emitting one event per state change | `generate.py` writes `order_status.ndjson`, **produced to the topic by hand** — this one does not come from Postgres |
+| Clickstream collector | analytics SDK and a collector service | `gen_clickstream.py`, uploaded from Azure Cloud Shell |
+| Helpdesk export | a support tool exporting resolved tickets | `gen_complaints.py`, 300 one-page PDFs |
+| Partner drop | a 3PL writing to a shared container on a schedule | `gen_settlement.py`, carriers `SWIFTLOG`, `METROSHIP`, `NCRDASH` |
+| Reference data | a spreadsheet a business owner maintains | `p6_write_pandas.py`, 8 rows, `RAW.DIM_STORE_SEED` |
+| Connector credentials | a secrets manager | key-pair files on disk, gitignored |
+| Scheduling | an orchestrator or Snowflake tasks on a timer | **absent** — every step was run by hand, see §16 |
+| Consumer of the share | a partner's own Snowflake account | **none created** — `CREATE MANAGED ACCOUNT` bills a child account |
+
+**Three sources stop at landing and that is deliberate.** Clickstream, settlement and
+the FX share prove their mechanism and have no consumer downstream, so nothing in the
+chains above carries them into `CORE`. §6 says which is which.
 
 ---
 
-## 3. Scale
+## 3. What it answers
+
+| Question | Who asks it | Where the answer comes from |
+|---|---|---|
+| Which orders in flight will breach their promise? | Dispatcher | Risk queue, §7 |
+| Which stores miss their promise, at which hours? | Operations | Store heatmap, §8 |
+| Why did the on-time rate move? | Regional management | The dimensional model, §5 |
+| How much stock will each store need? | Supply planning | Daily stock snapshots |
+| What are customers complaining about? | Customer experience | Triage queue, §7 |
+| Who may see customer contact details? | Compliance | The protection layer, §9 |
+
+---
+
+## 4. Scale
 
 | | |
 |---|---|
@@ -120,7 +179,7 @@ or out-of-order status transitions.
 
 ---
 
-## 4. How the platform is organised
+## 5. How the platform is organised
 
 One database, `QCOMMERCE`. Nine schemas, and **the schema an object lives in is the
 statement of who may read it** — that is the access design, not a naming convention.
@@ -151,7 +210,7 @@ Boundary test: expressible in SQL → dbt owns it. Needs scikit-learn or row-wis
 
 ---
 
-## 5. The sources, and how data gets in
+## 6. The sources, and how data gets in
 
 ### Seven sources. Fourteen routes. Those are different numbers.
 
@@ -211,27 +270,42 @@ Those three sum to 20,000 — every order, in exactly one of them.
 The one order's own figures — 19:04, 18 minutes promised, 26 delivered, 0.23 and 0.31 —
 are illustrative, chosen to show the path rather than measured from a specific row.
 
-1. A customer orders at 19:04. The row appears in the operational database and change
-   capture carries it to `RAW.CDC_ORDERS` within seconds, **exactly as written** —
-   no cleaning, nothing discarded.
-2. `RAW.SLA_THRESHOLD` says that store, at that hour, promises 18 minutes. **The promise
-   is data, not code.**
-3. The order is packed, picked up, delivered. Four events land in
-   `RAW.ORDER_STATUS_KAFKA_V4`. One is a duplicate — the broker delivers at least once —
-   and it stays, because `RAW` never dedupes.
-4. `CORE.ORDER_STATUS_EVENT` resolves the duplicate. `CORE.ORDER_FUNNEL` reads the four
-   events in order and finds delivery took 26 minutes against 18 promised.
+1. **A customer taps pay at 19:04.** The order service writes one row to its OLTP
+   database and moves on — it does not publish, notify or call anything. **Debezium**
+   reads that write out of the write-ahead log, emits it to **Kafka**, and the
+   **Snowflake Kafka connector v4** lands it in `RAW.CDC_ORDERS` within seconds,
+   **exactly as written** — no cleaning, nothing discarded.
+   *In this PoC:* Postgres 16 in Docker, Redpanda as the broker.
+2. **Nobody looks up the promise in code.** `RAW.SLA_THRESHOLD` says that store, at
+   that hour, promises 18 minutes — a row an ops manager changed in a pull request.
+   **The promise is data, not code**, which is why changing it changes the late rate
+   without changing a single delivery.
+3. **A picker packs it, a rider collects it, the customer takes delivery.** Each tap on
+   the rider app is one event on a Kafka topic, and the sink connector lands four of
+   them in `RAW.ORDER_STATUS_KAFKA_V4`. One is a duplicate — the broker delivers at
+   least once — and it stays, because `RAW` never dedupes.
+   *In this PoC:* these events come from `order_status.ndjson` produced to the topic by
+   hand, not from the database in step 1.
+4. **The analytics engineers' models run.** `CORE.ORDER_STATUS_EVENT` resolves the
+   duplicate, and `CORE.ORDER_FUNNEL` reads the four events in order and finds delivery
+   took 26 minutes against 18 promised.
 5. `MART.FCT_ORDER` records the order as breached, priced at the product's price **at
-   19:04** — from `CORE.DIM_PRODUCT`, not today's price.
-6. The risk model had already scored it at 19:04, from what was knowable then: distance,
-   store load, hour of day. It said 0.23. `SERVE.ORDER_RISK` carries the score and the
-   outcome side by side, which is the only way to find out whether the model was right.
-7. The customer writes in. The letter becomes `RAW.COMPLAINT_DOC`, then
-   `CORE.COMPLAINT`, and the classifier files it as `LATE_DELIVERY` with confidence
-   0.31 — below the 0.235 auto threshold, so `SERVE.COMPLAINT_TRIAGE` routes it to a
-   person rather than an automatic reply.
-8. That person acts. What they decide is written to `SERVE.ACTION_LOG` — **and becomes
-   training data for the next model.** This is the loop closing.
+   19:04** — from `CORE.DIM_PRODUCT`, not today's price. A refund argued three weeks
+   later is settled against what the customer was actually charged.
+6. **The dispatcher had already seen it coming.** The risk model scored the order at
+   19:04 from what was knowable then — distance, store load, hour of day — and said
+   0.23. `SERVE.ORDER_RISK` carries that score beside the outcome, which is the only
+   way to find out whether the model was right.
+   *In this PoC:* the console replays past days; no dispatcher moved a rider.
+7. **A week later the customer writes in.** The helpdesk exports the letter as a PDF,
+   it becomes `RAW.COMPLAINT_DOC` then `CORE.COMPLAINT`, and the classifier files it as
+   `LATE_DELIVERY` with confidence 0.31 — below the 0.235 auto threshold, so
+   `SERVE.COMPLAINT_TRIAGE` puts it in front of a **CX agent** rather than sending an
+   automatic reply.
+8. **The CX agent acts**, and what they decide is written to `SERVE.ACTION_LOG` — **and
+   becomes training data for the next model.** This is the loop closing: the judgement
+   of the person who handled one complaint is an input to how the next thousand are
+   routed.
 
 ### The fourteen routes
 
@@ -250,7 +324,7 @@ dataset someone is willing to share should not be copied.
 | 8 | Query files without loading | External table + insert-only stream | 2,800 |
 | 9 | Open-format archive | Apache Iceberg v3 on an external volume | 79,038 |
 | 10 | Unstructured documents | Directory table + `pypdf` UDF | 300 |
-| 11 | Outbound call from the warehouse | *Blocked — see §11* | — |
+| 11 | Outbound call from the warehouse | *Blocked — see §12* | — |
 | 12 | Shared dataset, zero copy | Marketplace share, queried live | 15,683 |
 | 13 | DataFrame to table | `write_pandas` | 8 |
 | 14 | Version-controlled constants | dbt seeds with tests | 125 |
@@ -277,7 +351,7 @@ directories.
 
 ---
 
-## 6. The two models
+## 7. The two models
 
 ### Late-delivery risk
 
@@ -314,7 +388,7 @@ table is description, not evidence.**
 
 300 letters as PDFs, ten reason codes, 60 hand labels, 240 to classify. Built as
 trained models running inside the warehouse, because the managed AI service is mostly
-gated on this account (§11).
+gated on this account (§12).
 
 | | Term-weighting + logistic regression | Hashed vector + nearest neighbour |
 |---|---:|---:|
@@ -346,7 +420,7 @@ classifier references it — verified mechanically, not by review.
 
 ---
 
-## 7. The application
+## 8. The application
 
 Four screens running inside the platform, so no data leaves it to be displayed. Each
 reads a published, governed view rather than the tables beneath, which means the
@@ -372,7 +446,7 @@ it.** A dashboard shows numbers; this writes down what somebody did about them.
 
 ---
 
-## 8. Protection
+## 9. Protection
 
 Every control is built **twice** and compared: once attached to the data itself, once
 approximated with a restricted view.
@@ -385,7 +459,7 @@ approximated with a restricted view.
 | PII discovery | Automated classification | **Changed the design** — see below |
 | Data quality | One rule expressed three ways | Only the platform-native metric runs when nobody runs anything |
 | Lineage | Three metadata sources compared | Only access history knows which *columns* were read |
-| Cost attribution | Query tags, per stage | See §10 |
+| Cost attribution | Query tags, per stage | See §11 |
 
 **Verified by role, not by grant.** Signed in as the analyst role, an email reads
 `A***********`, a phone `XXXXXXXXX0819`, a coordinate stored at six decimal places
@@ -412,7 +486,7 @@ policy that reveals it, not even between two statements.
 
 ---
 
-## 9. What leaves, and how
+## 10. What leaves, and how
 
 One outbound feed: daily delivery performance by store, as a share.
 
@@ -440,7 +514,7 @@ reads it.
 
 ---
 
-## 10. Automated build, and what it cost
+## 11. Automated build, and what it cost
 
 ### Build
 
@@ -479,7 +553,7 @@ one thing**, which is a decision rather than an omission:
 | | Deployed by CI? | Why |
 |---|---|---|
 | dbt → `MART` | **yes** | `SVC_CI` holds `QC_ENGINEER`, which already owns `MART`. **No new grant.** It promotes the same 9 models and 42 tests the clone build just proved, into the schema the same role already writes |
-| `sql/deploy/` | no | `QC_ENGINEER` cannot write `SERVE`. Granting it that puts a **row access policy behind a merge button** — §8 and §9 are largely about protection going missing through derived objects, and this would be that failure with a nicer interface. Deployed by hand, as `ACCOUNTADMIN` |
+| `sql/deploy/` | no | `QC_ENGINEER` cannot write `SERVE`. Granting it that puts a **row access policy behind a merge button** — §9 and §10 are largely about protection going missing through derived objects, and this would be that failure with a nicer interface. Deployed by hand, as `ACCOUNTADMIN` |
 | `streamlit/` | no | the stage `PUT` is `ACCOUNTADMIN`'s, and `app.py` changes rarely. One command is the right ceremony for a file that ships by being copied to a stage |
 
 The rejected alternative was a second service user privileged enough for all three —
@@ -531,7 +605,7 @@ their exit codes:
 `OK created sql table model MART_CI_35006122489.fct_order_item … SUCCESS 54635` is the
 line that settles it: the run-id clone rather than `MART`, and not `RAW_MART_CI_…`, so
 `DBT_TARGET_SCHEMA`, the `ci` target and `macros/generate_schema_name.sql` all did what
-they claimed. 54,635 rows is the order-line count from §3 — the clone carried real data.
+they claimed. 54,635 rows is the order-line count from §4 — the clone carried real data.
 
 **Four defects in this workflow were found by reading it and one by running it.** The
 missing `dbt deps`, the `ci` target that did not exist, `DBT_TARGET_SCHEMA` read by
@@ -578,7 +652,7 @@ Streaming roughly 548,000 rows cost 0.0001 credits.
 
 ---
 
-## 11. What this account could not do
+## 12. What this account could not do
 
 | Constraint | Kind | Consequence |
 |---|---|---|
@@ -601,7 +675,7 @@ The same mechanism deployed a view one step later.
 
 ---
 
-## 12. What building this found
+## 13. What building this found
 
 Four ways of making a new object out of a protected one. **All four treat the
 protection differently, and no single feature's documentation mentions the others.**
@@ -646,7 +720,7 @@ no opinion about what ought to have worked.**
 
 ---
 
-## 13. Cost discipline in force
+## 14. Cost discipline in force
 
 | Control | Setting |
 |---|---|
@@ -668,7 +742,7 @@ private keys are excluded from version control.
 
 ---
 
-## 14. Repository
+## 15. Repository
 
 | Path | Contents |
 |---|---|
@@ -721,7 +795,7 @@ instruction and the command to resume, and never pretends a gate was cleared.
 
 ---
 
-## 15. What is deliberately absent
+## 16. What is deliberately absent
 
 - **Scheduling.** The orchestration design — run-summary tasks, value handoff between
   steps, gates that skip work when no new data arrived — was **never built**. Every
@@ -733,7 +807,7 @@ instruction and the command to resume, and never pretends a gate was cleared.
   publication needs a provider profile created in the console UI.
 - **The promotion rule.** The published layer still reads the sandbox directly.
   Implementing the rule as written would materialise those rows and recreate the defect
-  in §12 — it needs the account-keyed pattern applied to every promoted object, not a
+  in §13 — it needs the account-keyed pattern applied to every promoted object, not a
   straight port.
 - **One ingestion route.** Outbound network access is refused on this account tier.
   Thirteen of fourteen is the ceiling here.
