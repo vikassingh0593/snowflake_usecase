@@ -414,11 +414,17 @@ Streaming roughly 548,000 rows cost 0.0001 credits.
 | Enterprise-grade protection available | confirmed by creating | Policies attach directly to columns and rows |
 | Model registry asked for a library its own channel lacked | version skew | Worked around by embedding the library with the model |
 | Application runtime thirty releases behind its catalogue | version skew | The application detects features at runtime instead of assuming a version |
+| **`EXECUTE IMMEDIATE FROM` cannot run a file containing `USE`** | contract | `090236 (42601): Unsupported statement type 'USE'`. It runs a file as a Scripting block, where session-context statements do not exist. Every SQL file here opens with four of them, so none is deployable as written — `sql/deploy/` is written to the narrower contract instead: every name fully qualified, context inherited from the caller |
 
-**Two kinds of surprise, and they want different responses.** A *tier gate* means a
+**Three kinds of surprise, and they want different responses.** A *tier gate* means a
 capability is absent — record it and route around. A *version skew* means it is present
 but a catalogue misdescribes it; it removes nothing, but it is invisible to every
-catalogue query and is found only by running the thing.
+catalogue query and is found only by running the thing. A *contract* means the capability
+is present and works, but only on input shaped a particular way — the most expensive of
+the three to diagnose, because it fails looking exactly like absence. The rebuild's git
+probe reported `ERROR` against a file whose first statement was `USE ROLE`, and the
+obvious reading of that row was that the account had refused the feature. It had not.
+The same mechanism deployed a view one step later.
 
 ---
 

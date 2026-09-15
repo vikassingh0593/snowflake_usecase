@@ -107,12 +107,27 @@ def run(session):
                 "LS @QCOMMERCE.LAB.TMP_P14_REPO/branches/main/sql/",
                 lambda r: "{} file(s)".format(len(r)),
             )
-            # EXECUTE IMMEDIATE FROM is the deploy mechanism. Pointed at the
-            # linter's own target rather than anything that changes state.
+            # EXECUTE IMMEDIATE FROM is the deploy mechanism. It used to point
+            # at sql/p13_probe.sql, chosen for changing no state -- and that
+            # file opens with USE ROLE on line 48. EXECUTE IMMEDIATE FROM runs
+            # a file as a Snowflake Scripting block, where USE does not exist,
+            # so the probe reported
+            #
+            #   090236 (42601): ... on line 48 at position 0: Unsupported
+            #   statement type 'USE'
+            #
+            # and read as the feature failing when the feature was fine. Step
+            # 54 deploys through the same mechanism and succeeds.
+            #
+            # sql/deploy/ exists for exactly this contract and its own header
+            # documents this error -- the repository already knew, in a
+            # different file from the one probing. CREATE OR REPLACE VIEW, so
+            # running it here and again in step 54 lands the same object twice.
             attempt(
                 "EXECUTE IMMEDIATE FROM the repo",
                 "EXECUTE IMMEDIATE FROM "
-                "@QCOMMERCE.LAB.TMP_P14_REPO/branches/main/sql/p13_probe.sql",
+                "@QCOMMERCE.LAB.TMP_P14_REPO/branches/main/sql/deploy/"
+                "v_share_entitlement.sql",
             )
             drop("DROP GIT REPOSITORY QCOMMERCE.LAB.TMP_P14_REPO")
         drop("DROP API INTEGRATION TMP_P14_GIT_API")

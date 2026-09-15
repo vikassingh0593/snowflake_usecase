@@ -324,10 +324,18 @@ MANIFEST=(
   and print where to paste it. It does neither. The probe in that file reaches
   GitHub over the PUBLIC repository URL with no credential at all, deliberately,
   so that a refusal reads as the feature being gated rather than as a token
-  problem. Expect VERDICT = GATED on the api integration for git row: section 1
-  Finding 3 is that external access integrations are refused on this account, and
-  a git repository stage is the same gate on a different object. A refusal there
-  is the measurement, not a failure -- steps 52 and 53 are written to record it.
+  problem.
+
+  AN EARLIER VERSION OF THIS GATE SAID TO EXPECT VERDICT = GATED on the api
+  integration for git row, reasoning from section 1 Finding 3 that external
+  access integrations are refused here. THAT PREDICTION WAS WRONG and the run
+  disproved it: api integration, git repository stage, git fetch and a 59-file
+  listing all came back OK, and step 54 then created GIT_API_QCOMMERCE, fetched,
+  and deployed a view from the repository. README section 11 and the step 22
+  tier note both already said a git integration IS permitted -- different
+  integration type, different gate -- and this gate was the only thing claiming
+  otherwise. A limitation asserted rather than measured is exactly what the tier
+  kind exists to stop, so it is recorded here rather than quietly deleted.
 
   ON A REBUILD THIS GATE IS OPTIONAL, like gates 18 and 20. What it actually sets
   is three repository secrets, read only by .github/workflows/ci.yml and by
