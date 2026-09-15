@@ -294,7 +294,7 @@ MANIFEST=(
 "sql|Vectors, similarity, a second classifier|sql/p10_vectors.sql"
 "sql|The two approaches on the same 240|sql/p10_eval_compare.sql"
 "sql|SERVE, the contract the app reads|sql/p11_serve.sql"
-"shell|Deploy the console|scripts/p11_deploy.sh"
+"shell|Deploy the console|DEPLOY=1 scripts/p11_deploy.sh"
 "sql|Column and row protection|sql/p12_policies.sql"
 "sql|Act on what the classifier found|sql/p12_classify_response.sql"
 "sql|Quality rules and lineage|sql/p12_quality_lineage.sql"
@@ -303,13 +303,25 @@ MANIFEST=(
 "sql|Repair: governance broke the performance layer|sql/p12_serve_repair.sql"
 "sql|Close the two defects that would be exported|sql/p13_serve_harden.sql"
 "sql|The outbound share|sql/p13_share.sql"
-"gate|GitHub access token|The git integration authenticates with a fine-grained PAT,
-  Contents: read-only, on this repository alone. Create it at
-  github.com/settings/personal-access-tokens and have it ready -- p14_git.sql
-  creates the secret that holds it and prints where to paste it.
-  Also set the repository secrets the CI workflow reads: SNOWFLAKE_ACCOUNT,
-  SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY. The warehouse job skips itself when
-  SNOWFLAKE_ACCOUNT is absent, so CI stays green without them."
+"gate|CI repository secrets|NO ACCESS TOKEN IS NEEDED HERE. An earlier version of this gate asked for a
+  fine-grained PAT and said sql/p14_git.sql would create the secret that holds it
+  and print where to paste it. It does neither. The probe in that file reaches
+  GitHub over the PUBLIC repository URL with no credential at all, deliberately,
+  so that a refusal reads as the feature being gated rather than as a token
+  problem. Expect VERDICT = GATED on the api integration for git row: section 1
+  Finding 3 is that external access integrations are refused on this account, and
+  a git repository stage is the same gate on a different object. A refusal there
+  is the measurement, not a failure -- steps 52 and 53 are written to record it.
+
+  ON A REBUILD THIS GATE IS OPTIONAL, like gates 18 and 20. What it actually sets
+  is three repository secrets, read only by .github/workflows/ci.yml and by
+  nothing in this build:
+      github.com/vikassingh0593/snowflake_usecase/settings/secrets/actions
+      SNOWFLAKE_ACCOUNT   SNOWFLAKE_USER   SNOWFLAKE_PRIVATE_KEY
+  SNOWFLAKE_PRIVATE_KEY is the CI key pair created in step 4 -- the PRIVATE half,
+  rsa_ci.p8, pasted whole, header and footer lines included. The warehouse job
+  skips itself when SNOWFLAKE_ACCOUNT is absent, so CI stays green without any of
+  them and the rebuild does not depend on this step."
 "sql|Git integration and repository|sql/p14_git.sql"
 "sql|Deploy from git|sql/p14_deploy.sql"
 "gate|Account budget|Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget
