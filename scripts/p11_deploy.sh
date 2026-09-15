@@ -56,6 +56,17 @@ if ! python3 -m py_compile "$APP" 2>/dev/null; then
 fi
 echo "   compiles"
 
+# The stage this PUTs into was created by sql/p11_streamlit_probe.sql, which is
+# a probe and is excluded from the build path -- so on a rebuild it does not
+# exist and the PUT fails with "Stage 'QCOMMERCE.APP.STG_APP' does not exist or
+# not authorized". A deploy that depends on a diagnostic having been run by hand
+# is not a deploy. It creates its own stage, the way scripts/p10_truth.sh does.
+# DIRECTORY = (ENABLE = TRUE) and the comment are copied from the probe, so
+# running either one first leaves the same object.
+STAGE_STMT="CREATE STAGE IF NOT EXISTS QCOMMERCE.APP.STG_APP
+  DIRECTORY = (ENABLE = TRUE)
+  COMMENT = 'Streamlit source. app.py and environment.yml live here'"
+
 PUT_STMT="PUT file://$APP @QCOMMERCE.APP.STG_APP/console AUTO_COMPRESS=FALSE OVERWRITE=TRUE"
 
 CREATE_VERB="CREATE STREAMLIT IF NOT EXISTS"
@@ -76,6 +87,8 @@ if [ "$DEPLOY" != "1" ]; then
     echo
     echo "== DRY RUN. Nothing sent to Snowflake."
     echo
+    echo "$STAGE_STMT;"
+    echo
     echo "$PUT_STMT;"
     echo
     echo "$STATEMENTS"
@@ -93,6 +106,7 @@ fi
 echo "== uploading"
 snow sql -c "$CONN" -q "USE ROLE ACCOUNTADMIN;
 ALTER SESSION SET QUERY_TAG = 'p11:deploy';
+$STAGE_STMT;
 $PUT_STMT;"
 
 echo "== creating the app"

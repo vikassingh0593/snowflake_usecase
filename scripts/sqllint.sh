@@ -122,6 +122,58 @@ if [ "$ARGC" -eq 0 ] && [ -f scripts/rebuild.sh ]; then
     done
 fi
 
+# 7. No build step may depend on an object that only an excluded file creates.
+#    Checks 5 and 6 ask whether a FILE is in the build. This asks whether the
+#    OBJECTS the build needs are. sql/p11_streamlit_probe.sql is a probe, and
+#    correctly excluded, but it was the only thing that created APP.STG_APP --
+#    which scripts/p11_deploy.sh PUTs into. On a rebuild the deploy failed with
+#    "Stage 'QCOMMERCE.APP.STG_APP' does not exist", because the build had never
+#    run the diagnostic that happened to create it.
+#
+#    An object is fine if any build-path file creates it, so a step that creates
+#    what it uses never trips this, and the probes' own TMP_ scratch objects are
+#    ignored. Both halves of the build path are read -- the sql/ files and the
+#    scripts/ ones. sql-only would have missed exactly this case.
+if [ "$ARGC" -eq 0 ] && [ -f scripts/rebuild.sh ]; then
+    if ! python3 - <<'PY'
+import re, io, os, sys
+src = io.open("scripts/rebuild.sh", encoding="utf-8").read()
+block = src.split("NOT_IN_BUILD=")[1].split("Four of the sixteen")[0]
+excluded = sorted(set(re.findall(r'\b(p\d+_[a-z_0-9]+)\b', block)))
+build = sorted(set(re.findall(r'sql/[a-z0-9_]+\.sql', src)) |
+               set("scripts/" + m for m in re.findall(r'scripts/([a-z0-9_]+\.sh)', src)
+                   if os.path.exists("scripts/" + m)))
+strip = lambda t: "\n".join(l for l in t.splitlines() if not l.lstrip().startswith(("--", "#")))
+CREATE = re.compile(
+    r'\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:TRANSIENT\s+)?'
+    r'(TABLE|VIEW|STAGE|FUNCTION|PROCEDURE|STREAM|TASK|SEQUENCE|FILE\s+FORMAT|DYNAMIC\s+TABLE|MODEL)\s+'
+    r'(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z_][A-Za-z0-9_.$]*)', re.I)
+bodies = {f: strip(io.open(f, encoding="utf-8").read()) for f in build if os.path.exists(f)}
+made = {n.split(".")[-1].upper() for t in bodies.values() for _, n in CREATE.findall(t)}
+bad = 0
+for e in excluded:
+    f = "sql/%s.sql" % e
+    if not os.path.exists(f):
+        continue
+    for typ, name in CREATE.findall(strip(io.open(f, encoding="utf-8").read())):
+        short = name.split(".")[-1].upper()
+        if short.startswith("TMP_") or short in made:
+            continue
+        readers = sorted({os.path.basename(b) for b, t in bodies.items()
+                          if re.search(r'\b%s\b' % re.escape(short), t, re.I)})
+        if readers:
+            bad = 1
+            print("  %s creates %s %s, which the build reads but never creates: %s"
+                  % (f, typ.upper(), short, ", ".join(readers)))
+sys.exit(bad)
+PY
+    then
+        echo "scripts/rebuild.sh"
+        echo "  (above) an excluded file is the only thing that creates it"
+        fail=1
+    fi
+fi
+
 if [ "$fail" -eq 0 ]; then
     echo "clean: ${#FILES[@]} file(s), and rebuild.sh accounts for all of them"
 fi
