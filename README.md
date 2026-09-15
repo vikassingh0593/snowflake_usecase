@@ -448,16 +448,53 @@ The platform reads this repository directly through a Git integration and deploy
 it. A pull request builds against a **zero-copy clone** of the dimensional model —
 free, instant, and **verified to carry the row-level protection of its source**.
 
-Continuous integration has two jobs. The lint job needs no secrets and no warehouse,
-and it is the one that earns its place: `scripts/sqllint.sh` catches the four mistakes
-that actually cost this project time — reserved words used as column aliases, a
-delimiter collision inside a stored procedure, an unqualified drop after an application
-package, and a double-escaped newline. **Every error this project paid for was a parse
-or naming mistake a machine can see.** A fifth check was added afterwards and looks
-forward rather than back: every file in `sql/` must be either a numbered build step or
-explicitly listed as excluded, and every build step must point at a file that exists.
-A rename that misses the manifest would otherwise break a rebuild months later and
-without a sound.
+Continuous integration has **three jobs, and only two of them need an account.**
+
+**`lint`** needs no secrets and no warehouse, and it is the one that earns its place.
+`scripts/sqllint.sh` catches the four mistakes that actually cost this project time —
+reserved words used as column aliases, a delimiter collision inside a stored procedure,
+an unqualified drop after an application package, and a double-escaped newline. **Every
+error this project paid for was a parse or naming mistake a machine can see.**
+
+Three further checks were added afterwards and look forward rather than back. Each
+closes a gap a rebuild found by falling into it:
+
+| | Asks | The gap it closes |
+|---|---|---|
+| 5 | is every file in `sql/` either a numbered build step or explicitly excluded? | a rename that misses the manifest breaks a rebuild months later, without a sound |
+| 6 | the same question, over `scripts/` | `p10_truth.sh` builds the complaint answer key and was in neither list, so step 38 asked for a table nothing had created |
+| 7 | does any build step need an object that **only an excluded file creates**? | `APP.STG_APP` existed solely inside a probe, so deploying the app failed on a stage no build had ever made |
+
+Checks 5 and 6 ask whether a *file* is in the build. Check 7 asks whether the *objects*
+the build needs are. That distinction is invisible until the account is genuinely empty,
+which is the argument for tearing it down rather than trusting that it could be.
+
+**`warehouse`** builds dbt against the clone on every pull request, then drops it —
+so a pull request never touches `MART`, and the clone is named for the run so two
+cannot collide.
+
+**`deploy`** is the CD half. It runs only on a merge to `main` and it deploys **exactly
+one thing**, which is a decision rather than an omission:
+
+| | Deployed by CI? | Why |
+|---|---|---|
+| dbt → `MART` | **yes** | `SVC_CI` holds `QC_ENGINEER`, which already owns `MART`. **No new grant.** It promotes the same 9 models and 42 tests the clone build just proved, into the schema the same role already writes |
+| `sql/deploy/` | no | `QC_ENGINEER` cannot write `SERVE`. Granting it that puts a **row access policy behind a merge button** — §8 and §9 are largely about protection going missing through derived objects, and this would be that failure with a nicer interface. Deployed by hand, as `ACCOUNTADMIN` |
+| `streamlit/` | no | the stage `PUT` is `ACCOUNTADMIN`'s, and `app.py` changes rarely. One command is the right ceremony for a file that ships by being copied to a stage |
+
+The rejected alternative was a second service user privileged enough for all three —
+a CI-reachable credential able to rewrite governance, which is the worst thing this
+account could gain, to save two commands nobody runs weekly. **What CI may deploy is
+decided by what its role already owns, not by what would be convenient.**
+
+The merge build is tagged `p14:cd_dbt` and the pull-request build `p14:ci_dbt`, because
+`sql/p15_cost.sql` attributes credits by tag prefix, and a rehearsal against a copy is
+not the same spend as a merge changing the real mart.
+
+**The job is inert until three repository secrets exist.** It gates on
+`SNOWFLAKE_ACCOUNT` exactly as `warehouse` does, and skips cleanly without it — verified
+on the merge that added it: gate `success`, every step after it `skipped`, nothing
+deployed. Setting the secrets is what arms it.
 
 The account can be removed and rebuilt. `sql/teardown.sql` drops everything the project
 created, account-wide and in the order the dependencies require — the assignment before
