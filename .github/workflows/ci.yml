@@ -15,9 +15,29 @@ name: ci
 # skipped rather than failed when they are absent, so a fork or a fresh clone
 # gets the useful half without configuration.
 #
-#   SNOWFLAKE_ACCOUNT       OOB49311
+#   SNOWFLAKE_ACCOUNT       AWTTGVH-OLB61128
 #   SNOWFLAKE_USER          SVC_CI
-#   SNOWFLAKE_PRIVATE_KEY   contents of the SVC_CI .p8, unencrypted
+#   SNOWFLAKE_PRIVATE_KEY   contents of rsa_ci.p8, whole file, BEGIN and END
+#                           lines included, unencrypted
+#
+# THE ACCOUNT VALUE USED TO READ OOB49311 HERE, WHICH IS THE ACCOUNT LOCATOR,
+# not the account identifier. dbt/profiles.yml has always connected with
+# AWTTGVH-OLB61128, the organisation-account form, so setting the locator would
+# have put two different spellings of the same account in one job -- dbt on one,
+# the snowflake.connector steps beside it on the other. A bare locator carries no
+# region, so it resolves only if the account sits in the provider's default one,
+# which is not something to discover from a CI failure. Nothing had ever used the
+# value, because the secret has never been set.
+#
+# Where each one is actually read, which is not evenly:
+#
+#   SNOWFLAKE_PRIVATE_KEY   both jobs. This is the credential.
+#   SNOWFLAKE_USER          warehouse only, by the clone and drop steps.
+#   SNOWFLAKE_ACCOUNT       warehouse, by the same two steps -- and by deploy
+#                           ONLY as the presence check that arms it.
+#
+# dbt reads none of them: profiles.yml hardcodes the account and the user, and
+# takes only the key path from the environment.
 #
 # deploy runs only on a push to main and builds MART for real. It is the CD half
 # and it deploys EXACTLY ONE THING, which is a decision rather than an omission.
