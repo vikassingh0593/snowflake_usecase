@@ -211,7 +211,13 @@ MANIFEST=(
   the repository has to be cloned each time. It is public, so no auth:
       git clone https://github.com/vikassingh0593/snowflake_usecase.git
       cd snowflake_usecase
-      bash scripts/upload_source.sh settlement"
+      bash scripts/upload_source.sh settlement
+
+  ON A REBUILD THIS GATE IS OPTIONAL, unlike gate 13. Its consumer reads the
+  container when it is queried rather than reacting to a blob-created event, so
+  whatever the previous build uploaded is enough and nothing has to arrive
+  again. Gate 13 is the exception: Snowpipe auto-ingest fires on Event Grid
+  notifications, and a blob already sitting in landing/ raises none."
 "sql|External table and Iceberg, mechanisms 8 and 9|sql/p5_external_iceberg.sql"
 "gate|Complaint PDF upload|In Azure Cloud Shell. It is ephemeral -- no files survive the session -- so
   the repository has to be cloned each time. It is public, so no auth:
@@ -219,7 +225,13 @@ MANIFEST=(
       cd snowflake_usecase
       bash scripts/upload_source.sh complaints
   _truth.csv stays behind. It is the answer key for Part 10 and a label sitting
-  in RAW next to the text it labels is how a model scores 100% on nothing."
+  in RAW next to the text it labels is how a model scores 100% on nothing.
+
+  ON A REBUILD THIS GATE IS OPTIONAL, unlike gate 13. Its consumer reads the
+  container when it is queried rather than reacting to a blob-created event, so
+  whatever the previous build uploaded is enough and nothing has to arrive
+  again. Gate 13 is the exception: Snowpipe auto-ingest fires on Event Grid
+  notifications, and a blob already sitting in landing/ raises none."
 "sql|Directory table over the PDFs, mechanism 10|sql/p6_directory_docs.sql"
 "sql|External network access, mechanism 11|sql/p6_external_access.sql"
 "gate|Marketplace listing|Snowsight -> Data Products -> Marketplace. Acquire the free
