@@ -283,8 +283,18 @@ MANIFEST=(
 "sql|RAW to CORE, conformance and dedupe|sql/p7_core_conform.sql"
 "sql|Streams and SCD2|sql/p7_core_scd2.sql"
 "sql|MATCH_RECOGNIZE over the status stream|sql/p7_core_funnel.sql"
-"dbt|The dimensional model, 9 models and 42 tests|build"
+# THESE TWO ARE ORDER-CRITICAL AND WERE THE WRONG WAY ROUND. dbt connects as
+# SVC_CI with role QC_ENGINEER; steps 28-30 build CORE as ACCOUNTADMIN. Without
+# the grants first, seven of the nine models fail on 002003 (42S02) naming
+# CORE.CUSTOMER, CORE.STORE, CORE.RIDER, CORE.DIM_PRODUCT, CORE.INVENTORY_DAILY,
+# CORE.ORDER_FUNNEL and CORE.ORDER_STATUS_EVENT -- the "or not authorized" half
+# of that error, not the "does not exist" half. dim_date builds anyway because
+# it reads nothing from CORE, and the seeds load because QC_ENGINEER already
+# holds RAW, so the run half-succeeds and the message points at the tables
+# rather than at the role. p8_grants.sql has no MART dependency, so nothing
+# argues for the other order.
 "sql|Let QC_ENGINEER read what ACCOUNTADMIN built|sql/p8_grants.sql"
+"dbt|The dimensional model, 9 models and 42 tests|build"
 "sql|The feature table|sql/p9_features.sql"
 "sql|Train, evaluate, register|sql/p9_train.sql"
 "sql|Score with the registered model|sql/p9_score.sql"
