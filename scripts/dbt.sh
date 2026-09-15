@@ -62,14 +62,25 @@ fi
 # the symptom and not the cause.
 #
 # THE TEST IS FOR A RESOLVED PACKAGE, NOT FOR THE DIRECTORY. Those are different
-# states and the difference broke a build. Commit 982533f deleted the 229 tracked
-# files under dbt_packages/dbt_utils/, but git leaves a directory standing when
-# anything untracked is still inside it, and .DS_Store and logs/ are both
-# gitignored. Pulling that commit on such a machine leaves an empty dbt_utils/,
-# which `[ ! -d dbt/dbt_packages ]` reads as resolved. deps was skipped and the
-# build died on "No dbt_project.yml found at expected path .../dbt_utils" --
-# the same class of symptom-not-cause error this block exists to prevent, from
-# the guard meant to prevent it.
+# states and the difference broke a build.
+#
+# dbt_utils ships its own .gitignore. Vendoring the package carried that file
+# into this repository, and git then applied a third-party package's ignore
+# rules to the act of committing that package. dbt_packages/dbt_utils/
+# integration_tests/.gitignore lists target/, dbt_modules/, logs/, .env/,
+# profiles.yml, package-lock.yml and dbt_internal_packages/ -- so six of
+# dbt_utils's own files went in untracked while 223 were committed. Commit
+# 982533f then deleted the 223 it could see. The six it never tracked stayed,
+# and git leaves a directory standing while anything is inside it:
+#
+#     dbt_packages/dbt_utils/integration_tests/profiles.yml
+#     dbt_packages/dbt_utils/integration_tests/package-lock.yml
+#     dbt_packages/dbt_utils/integration_tests/.env/{bigquery,postgres,redshift,snowflake}.env
+#
+# `[ ! -d dbt/dbt_packages ]` read that husk as a resolved package. deps was
+# skipped and the build died on "No dbt_project.yml found at expected path
+# .../dbt_utils" -- the same class of symptom-without-cause error this block
+# exists to prevent, produced by the guard meant to prevent it.
 #
 # Every installed package is a directory named for its package-lock.yml `name:`
 # and containing a dbt_project.yml, so that pair is what gets checked. No lock

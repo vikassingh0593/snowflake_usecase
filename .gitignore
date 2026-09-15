@@ -28,10 +28,11 @@ venv/
 # it pins the resolved version, so scripts/dbt.sh and CI install the same
 # dbt_utils. scripts/dbt.sh runs `dbt deps` by itself when the packages named in
 # package-lock.yml are not installed, so a fresh clone needs no extra step. It
-# tests for the resolved package and not for this directory: git leaves a
-# directory standing when anything untracked is inside it, so the commit that
-# stopped vendoring dbt_utils left an empty dbt_packages/dbt_utils/ on machines
-# carrying a .DS_Store, and a directory test read that as installed.
+# tests for the resolved package and not for this directory. dbt_utils ships its
+# own .gitignore; vendoring it made git apply that package's rules to the commit
+# vendoring it, so six of its files were never tracked, survived the commit that
+# removed the other 223, and left a dbt_utils/ husk a directory test read as
+# installed.
 target/
 logs/
 dbt_modules/
