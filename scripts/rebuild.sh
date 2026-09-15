@@ -165,9 +165,35 @@ MANIFEST=(
   docker compose up -d returns as soon as the containers are created, not when
   Connect is listening, and step 9 posts a connector to localhost:8083. Wait for
   it or that step fails on a connection refused that looks like a config error:
-      until curl -sf localhost:8083/connectors >/dev/null; do sleep 3; done"
+      until curl -sf localhost:8083/connectors >/dev/null; do sleep 3; done
+
+  ON A REBUILD, THE BROKER IS NOT EMPTY. sql/teardown.sql removes Snowflake
+  objects and nothing else, and the named volumes pgdata and rpdata survive
+  docker compose down. Connect stores its connector configs in a Kafka topic, so
+  the PREVIOUS build's connectors come back by themselves the moment Connect
+  starts -- including Part 7's qc-postgres-cdc and qc-snowflake-cdc-v4, twenty
+  steps early and pointed at tables this build has not created yet. Delete them
+  and let steps 10 and 27 create what they own:
+      curl -s "localhost:8083/connectors" | python3 -m json.tool
+      curl -s -X DELETE localhost:8083/connectors/qc-snowflake-cdc-v4
+      curl -s -X DELETE localhost:8083/connectors/qc-postgres-cdc
+
+  THE TOPIC STEP 10 CONSUMES IS NOT PRODUCED BY ANYTHING IN THIS REPOSITORY.
+  qc.order_status was produced by hand in Part 3 and never automated; every other
+  topic is a Debezium snapshot that rebuilds itself, which is why only this one
+  has ever gone missing. rpdata usually still holds it, so check before doing
+  anything:
+      docker exec qc-redpanda rpk topic describe -p qc.order_status
+  A high watermark near 79,663 means it survived and step 10 will consume it. If
+  the topic is gone, produce it from the generator output. Expect it to be gone
+  on any account where Part 7 has run: p7_source_reset.sh deletes this topic and
+  says so under WHAT IS NOT RECOVERED, so a teardown is not what loses it.
+  Verified on rpk in this stack -- ten records first, then the rest:
+      docker exec qc-redpanda rpk topic create qc.order_status -p 3
+      docker exec -i qc-redpanda rpk topic produce qc.order_status \\
+        < source/out/order_status.ndjson"
 "shell|Kafka connector plugin|scripts/p3_connector.sh"
-"shell|Sink connector, mechanisms 1 and 3|scripts/p3_sink.sh"
+"shell|Sink connector, mechanisms 1 and 3|scripts/p3_sink.sh v4 && scripts/p3_sink.sh v3"
 "shell|Snowpipe Streaming SDK, mechanism 2|scripts/run_in_container.sh stream"
 "sql|Mechanisms 1 vs 2 vs 3 on identical input|sql/p3_benchmark.sql"
 "gate|Clickstream upload|In Azure Cloud Shell:
