@@ -103,6 +103,25 @@ if [ "$ARGC" -eq 0 ] && [ -f scripts/rebuild.sh ]; then
     done
 fi
 
+# 6. The same check over scripts/. sql/ has had coverage since this linter was
+#    written and scripts/ never did, which is how scripts/p10_truth.sh -- the
+#    only thing that creates OPS.COMPLAINT_TRUTH, read by three later steps --
+#    sat in neither the manifest nor the exclusion list while this linter
+#    reported clean over 58 files. A build step that is invisible to the runner
+#    is invisible to the linter too unless the linter looks.
+if [ "$ARGC" -eq 0 ] && [ -f scripts/rebuild.sh ]; then
+    excluded=$(sed -n '/^NOT_IN_BUILD=/,/^Each records/p' scripts/rebuild.sh \
+                 | grep -oE '\b[a-z0-9_]+\.sh\b' | sort -u)
+    for path in scripts/*.sh; do
+        base=$(basename "$path")
+        grep -qF "$base" scripts/rebuild.sh && continue
+        printf '%s\n' "$excluded" | grep -qxF "$base" && continue
+        echo "scripts/rebuild.sh"
+        echo "  in scripts/ but neither run by the build nor listed as excluded: $path"
+        fail=1
+    done
+fi
+
 if [ "$fail" -eq 0 ]; then
     echo "clean: ${#FILES[@]} file(s), and rebuild.sh accounts for all of them"
 fi

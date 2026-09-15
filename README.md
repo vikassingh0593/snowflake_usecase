@@ -368,7 +368,7 @@ without a sound.
 The account can be removed and rebuilt. `sql/teardown.sql` drops everything the project
 created, account-wide and in the order the dependencies require — the assignment before
 the resource monitor, the Iceberg table before the external volume, the stages before
-the storage integration. `scripts/rebuild.sh` walks the 55 steps back up. Eleven of them
+the storage integration. `scripts/rebuild.sh` walks the 56 steps back up. Eleven of them
 stop for a human, because eleven of them are a consent screen, a UI, or a token.
 
 ### Cost
@@ -517,7 +517,7 @@ private keys are excluded from version control.
 
 Twenty-one of the 58 files in `sql/` are not build steps — probes, diagnostics,
 reprints and the teardown — and nothing in a directory listing says which is
-which. `scripts/rebuild.sh plan` is the answer: 55 numbered steps, and the
+which. `scripts/rebuild.sh plan` is the answer: 56 numbered steps, and the
 twenty-one excluded files named underneath.
 
 ### Running it
@@ -534,7 +534,7 @@ scripts/dbt.sh build                   # transformations and tests
 ```
 
 **A full rebuild is not unattended, and nothing could make it so.** Eleven of the
-55 steps need a person somewhere that is not a terminal — an Azure tenant
+56 steps need a person somewhere that is not a terminal — an Azure tenant
 administrator consenting to a service principal, a Marketplace listing accepted
 in a UI, a budget activated through a screen that has no SQL equivalent on this
 account. `build` runs every step that can be run, stops at each gate with the

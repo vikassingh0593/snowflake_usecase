@@ -300,6 +300,12 @@ MANIFEST=(
 "sql|Score with the registered model|sql/p9_score.sql"
 "sql|Complaint text preparation|sql/p10_text_prep.sql"
 "sql|Classify complaints to reason codes|sql/p10_classify.sql"
+# The answer key. Held back from the training path on purpose -- the 300 PDFs
+# went to blob without _truth.csv, so the classifier earns the other 240 -- and
+# then held back from the manifest by accident, which is a different thing. It
+# creates OPS.COMPLAINT_TRUTH, and p10_eval, p10_eval_compare and p11_serve all
+# read it. LOAD=1 or it prints the statements and exits 0.
+"shell|The answer key, held back until after the classifier ran|LOAD=1 scripts/p10_truth.sh"
 "sql|Score the classifier against the answer key|sql/p10_eval.sql"
 "sql|Vectors, similarity, a second classifier|sql/p10_vectors.sql"
 "sql|The two approaches on the same 240|sql/p10_eval_compare.sql"
@@ -354,6 +360,15 @@ NOT_IN_BUILD="Twenty-one of the 58 files in sql/ are not build steps:
   one-time      p9_registry_fix  p11_fix_object_type
   deferred      p3_credits_backfill -- wants ~3h of ACCOUNT_USAGE latency first
   teardown      teardown.sql
+
+Four of the sixteen scripts in scripts/ are not build steps either:
+  tools         sql.sh -- run one file, print only its result tables
+                sqllint.sh -- the checks CI runs over this repo
+  diagnostic    p3_props.sh -- dump the config a connector plugin accepts
+  demo surface  p13_sqlapi.sh -- Part 13's HTTP surface. Nothing reads its output
+lib.sh is sourced, and dbt.sh and rebuild.sh are the runners. Every other script
+is a build step. p10_truth.sh was neither listed here nor in the manifest, which
+is how it went missing until step 38 asked for the table it creates.
 
 Each records what the account did when asked a question. The build path does not
 re-enact them, and a probe run against an account that already has the feature
