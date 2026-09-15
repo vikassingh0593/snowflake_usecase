@@ -3,12 +3,19 @@
 # scripts/p2_rbac.sh — grant the Snowflake service principals access.
 # Run in Azure Cloud Shell, AFTER granting consent at both URLs.
 #
-# THE TWO APP NAMES BELOW BELONG TO ONE BUILD. Dropping and recreating the
-# integrations mints new service principals with new names, and this script will
-# then match nothing and report NOT_FOUND for both. After a rebuild, read
-# AZURE_MULTI_TENANT_APP_NAME from DESC EXTERNAL VOLUME EXVOL_QC, DESC
-# INTEGRATION SI_QC_AZURE and DESC INTEGRATION NI_QC_SNOWPIPE, and put the part
-# before the underscore into APP_BLOB and APP_QUEUE.
+# THE TWO APP NAMES BELOW SURVIVE A TEARDOWN, which is not obvious and was
+# asserted the other way round here until a rebuild measured it. Snowflake does
+# not mint a service principal per integration object: the multi-tenant app is
+# per account and storage account, so dropping EXVOL_QC, SI_QC_AZURE and
+# NI_QC_SNOWPIPE and creating them again hands back these same two apps, with
+# their tenant consent and container role assignments intact. Measured after a
+# full teardown on 2026-09-15: n1fam5snowflakepacint_1788981137125 and
+# 14bjnhsnowflakepacint_1788981138681, and SYSTEM$VERIFY_EXTERNAL_VOLUME passing
+# every check with no consent or RBAC work done.
+#
+# On a DIFFERENT account the names differ. Read AZURE_MULTI_TENANT_APP_NAME from
+# DESC EXTERNAL VOLUME EXVOL_QC, DESC INTEGRATION SI_QC_AZURE and DESC
+# INTEGRATION NI_QC_SNOWPIPE, and put the part before the underscore here.
 #
 # Snowflake issued TWO apps for this account:
 #   n1fam5snowflakepacint  -> external volume + storage integration (blob)

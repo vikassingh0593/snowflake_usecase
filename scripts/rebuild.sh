@@ -95,14 +95,32 @@ MANIFEST=(
   scripts/p2_rbac.sh is NOT this step. It grants Azure roles, and it belongs at
   step 6. rsa_key*, *.p8 and .env are gitignored; confirm before committing."
 "sql|Azure integrations|sql/p2_integrations.sql"
-"gate|Azure tenant-admin consent and RBAC|THE LONGEST STEP IN THE PROJECT, AND THE ONE THAT WASTES TIME.
-  Three objects were just created and each one minted its OWN service principal:
-  a rebuild does not inherit the consent or the role assignments the previous
-  build had. All three have to be done again, separately.
+"gate|Azure tenant-admin consent and RBAC|CHECK BEFORE DOING ANY OF THIS. On a rebuild in the same account it is
+  almost certainly already done, and this was the longest gate in the project
+  until a rebuild proved it a no-op:
+      snow sql -c qcpoc -q \"SELECT SYSTEM\$VERIFY_EXTERNAL_VOLUME('EXVOL_QC')\"
+  success:true with write, read, list, delete and azureGetUserDelegationKey all
+  PASSED means consent and RBAC are intact. Go to step 7.
+
+  WHY IT SURVIVES A TEARDOWN. Snowflake does not mint a service principal per
+  integration object. The multi-tenant app is per account and storage account, so
+  dropping EXVOL_QC, SI_QC_AZURE and NI_QC_SNOWPIPE and creating them again hands
+  back the same two apps, and the tenant consent and the container role
+  assignments granted to them still stand. Measured on this account, after a full
+  teardown: n1fam5snowflakepacint_1788981137125 for blob and
+  14bjnhsnowflakepacint_1788981138681 for the queue -- the same prefixes
+  scripts/p2_rbac.sh has had hardcoded since the first build. UNVERIFIED as
+  documented behaviour; verified here once.
+
+  EVERYTHING BELOW IS FOR A FIRST BUILD, a different account, or a tenant where
+  consent was revoked. Three objects, each with its own consent URL:
 
       DESC EXTERNAL VOLUME EXVOL_QC;      -- expand STORAGE_LOCATIONS for its URL
       DESC INTEGRATION SI_QC_AZURE;
       DESC INTEGRATION NI_QC_SNOWPIPE;
+
+  The boxes wrap these badly. --format csv puts each property on one line:
+      snow sql -c qcpoc -q \"DESC INTEGRATION SI_QC_AZURE\" --format csv | grep -i azure_
 
   For EACH of the three:
     1. Read AZURE_CONSENT_URL and AZURE_MULTI_TENANT_APP_NAME from the output.
@@ -122,16 +140,14 @@ MANIFEST=(
        them and never writes them. archive is the exception because Iceberg
        writes there. The queue needs contributor because Snowpipe dequeues.
 
-  scripts/p2_rbac.sh automates step 4 ONLY IF ITS APP NAMES ARE UPDATED FIRST.
-  It has the previous build's two app prefixes hardcoded at the top, and new
-  principals get new names, so as it stands it will silently find nothing. Read
-  AZURE_MULTI_TENANT_APP_NAME from the three DESC outputs, put the prefixes in
-  APP_BLOB and APP_QUEUE, then run it in Cloud Shell. Portal clicking is fine
-  too; the script only exists because container-scoped grants are fiddly.
+  scripts/p2_rbac.sh automates step 4 and its two hardcoded app prefixes are
+  correct for this account, for the reason above. On a different account, read
+  AZURE_MULTI_TENANT_APP_NAME from the DESC outputs and put the prefixes in
+  APP_BLOB and APP_QUEUE first. Run it in Cloud Shell; portal clicking is fine
+  too, the script only exists because container-scoped grants are fiddly.
 
   RBAC PROPAGATION TAKES ABOUT FIVE MINUTES. Verification failing straight after
-  a grant means wait, not debug. This is the single most common way to lose half
-  an hour on this project.
+  a grant means wait, not debug.
 
   THE GATE, and do not go past a failure here -- every Iceberg step depends on it:
       SELECT SYSTEM\$VERIFY_EXTERNAL_VOLUME('EXVOL_QC');"
