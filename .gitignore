@@ -26,8 +26,12 @@ venv/
 #
 # package-lock.yml IS committed, and is the part that was actually load-bearing:
 # it pins the resolved version, so scripts/dbt.sh and CI install the same
-# dbt_utils. scripts/dbt.sh runs `dbt deps` by itself when dbt_packages/ is
-# absent, so a fresh clone needs no extra step.
+# dbt_utils. scripts/dbt.sh runs `dbt deps` by itself when the packages named in
+# package-lock.yml are not installed, so a fresh clone needs no extra step. It
+# tests for the resolved package and not for this directory: git leaves a
+# directory standing when anything untracked is inside it, so the commit that
+# stopped vendoring dbt_utils left an empty dbt_packages/dbt_utils/ on machines
+# carrying a .DS_Store, and a directory test read that as installed.
 target/
 logs/
 dbt_modules/

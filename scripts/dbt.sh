@@ -60,8 +60,36 @@ fi
 # model in MART calls dbt_utils.generate_surrogate_key, so without this a fresh
 # clone fails on the first model with "'dbt_utils' is undefined", which names
 # the symptom and not the cause.
-if [ ! -d dbt/dbt_packages ] && [ "${1:-}" != "deps" ]; then
-  echo "== dbt_packages/ absent, resolving from package-lock.yml (once)"
+#
+# THE TEST IS FOR A RESOLVED PACKAGE, NOT FOR THE DIRECTORY. Those are different
+# states and the difference broke a build. Commit 982533f deleted the 229 tracked
+# files under dbt_packages/dbt_utils/, but git leaves a directory standing when
+# anything untracked is still inside it, and .DS_Store and logs/ are both
+# gitignored. Pulling that commit on such a machine leaves an empty dbt_utils/,
+# which `[ ! -d dbt/dbt_packages ]` reads as resolved. deps was skipped and the
+# build died on "No dbt_project.yml found at expected path .../dbt_utils" --
+# the same class of symptom-not-cause error this block exists to prevent, from
+# the guard meant to prevent it.
+#
+# Every installed package is a directory named for its package-lock.yml `name:`
+# and containing a dbt_project.yml, so that pair is what gets checked. No lock
+# file at all also counts as unresolved: deps writes one.
+deps_unresolved() {
+  [ -f dbt/package-lock.yml ] || return 0
+  local name
+  while read -r name; do
+    [ -f "dbt/dbt_packages/$name/dbt_project.yml" ] || return 0
+  done < <(sed -n 's/^[[:space:]]*-[[:space:]]*name:[[:space:]]*//p' dbt/package-lock.yml)
+  return 1
+}
+
+if [ "${1:-}" != "deps" ] && deps_unresolved; then
+  echo "== dbt_packages/ unresolved, installing from package-lock.yml (once)"
+  # A half-deleted dbt_packages/ is what gets here. dbt deps replaces a package
+  # directory it has a record of and ignores one it does not, so clear the whole
+  # thing first rather than install alongside the debris. dbt_project.yml already
+  # declares dbt_packages a clean-target; this is what `dbt clean` would remove.
+  rm -rf dbt/dbt_packages
   docker run --rm -v "$PWD":/work "$IMAGE" deps --profiles-dir . --target dev
 fi
 
