@@ -1,6 +1,6 @@
 name: ci
 
-# Two jobs, and only one of them needs an account.
+# Three jobs, and only two of them need an account.
 #
 # lint runs on every push and pull request with no secrets and no Snowflake
 # connection at all. It is the job that will actually catch things, because
@@ -18,6 +18,35 @@ name: ci
 #   SNOWFLAKE_ACCOUNT       OOB49311
 #   SNOWFLAKE_USER          SVC_CI
 #   SNOWFLAKE_PRIVATE_KEY   contents of the SVC_CI .p8, unencrypted
+#
+# deploy runs only on a push to main and builds MART for real. It is the CD half
+# and it deploys EXACTLY ONE THING, which is a decision rather than an omission.
+#
+# SVC_CI holds QC_ENGINEER, and QC_ENGINEER owns MART and nothing else. Building
+# MART on merge therefore needs no new grant: it promotes the same nine models
+# and forty-two tests the warehouse job already proved against a clone, into the
+# schema the same role already writes. That is the whole of what CI can deploy
+# without changing who can change what.
+#
+# WHAT IS DELIBERATELY NOT DEPLOYED HERE:
+#
+#   sql/deploy/     one view, over the share entitlement. QC_ENGINEER cannot
+#                   write SERVE, and granting it that would put a governance
+#                   object behind a merge button. Part 13 is an entire section
+#                   on protection going missing through derived objects; a row
+#                   access policy that can be replaced by pressing Merge is the
+#                   same failure with a nicer interface. Deploy it by hand:
+#                   sql/p14_deploy.sql, which runs as ACCOUNTADMIN.
+#
+#   streamlit/      the PUT into @QCOMMERCE.APP.STG_APP is ACCOUNTADMIN's too,
+#                   and app.py changes rarely. DEPLOY=1 scripts/p11_deploy.sh is
+#                   the right amount of ceremony for a file that ships by being
+#                   copied to a stage.
+#
+# The alternative considered and rejected: a second service user holding enough
+# privilege to deploy all three. That is a CI-reachable credential able to
+# rewrite governance, which is the single worst thing this account could gain,
+# and it would be added to save two commands nobody runs weekly.
 #
 # SVC_CI is TYPE = SERVICE and key-pair only, so it cannot be used to log in
 # interactively even if the secret leaks. No password exists to add here.
@@ -174,3 +203,55 @@ jobs:
           conn.cursor().execute("DROP SCHEMA IF EXISTS MART_CI_${{ github.run_id }}")
           print("dropped")
           PY
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [lint, warehouse]
+    # Merges only. A pull request builds the clone above and stops there.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Are the secrets present
+        id: gate
+        env:
+          ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+        run: |
+          if [ -z "$ACCOUNT" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "no SNOWFLAKE_ACCOUNT secret. Skipping the deploy job."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dbt
+        if: steps.gate.outputs.configured == 'true'
+        run: pip install --quiet dbt-core==1.12.4 dbt-snowflake==1.12.0
+
+      - name: Write the key
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.dbt
+          printf '%s' "$PRIVATE_KEY" > ~/svc_ci.p8
+          chmod 600 ~/svc_ci.p8
+          echo "DBT_KEY_PATH=$HOME/svc_ci.p8" >> "$GITHUB_ENV"
+
+      - name: dbt deps
+        if: steps.gate.outputs.configured == 'true'
+        run: dbt deps --project-dir dbt
+
+      # --target dev, and DBT_TARGET_SCHEMA left unset so dbt_project.yml's
+      # default of MART applies. macros/generate_schema_name.sql is what makes
+      # that MART literally rather than RAW_MART.
+      #
+      # A separate query tag from the clone build. p14:ci_dbt is a pull request
+      # rehearsing against a copy; p14:cd_dbt is a merge changing the real mart,
+      # and sql/p15_cost.sql splits on the prefix, so one tag for both would
+      # make them impossible to tell apart afterwards.
+      - name: dbt build into MART
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DBT_QUERY_TAG: p14:cd_dbt
+        run: dbt build --project-dir dbt --profiles-dir dbt --target dev
