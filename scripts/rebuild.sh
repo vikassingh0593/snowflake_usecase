@@ -239,11 +239,29 @@ MANIFEST=(
   is no SQL that accepts a listing's terms on your behalf."
 "sql|Marketplace join, mechanism 12|sql/p6_marketplace.sql"
 "shell|write_pandas, mechanism 13|scripts/run_in_container.sh pandas"
-"gate|CDC|Debezium has to be pointed at a source that has moved:
-      bash scripts/p7_source_reset.sh
-      bash scripts/p7_cdc_sink.sh
-      bash scripts/p7_mutate_source.sh
-  Seven topics, one connector, deletes included."
+"gate|CDC|EVERY ONE OF THESE DEFAULTS TO A DRY RUN OR A READ. Without the
+  modifiers below they print what they would do, exit 0, and change nothing:
+      RESET=1 bash scripts/p7_source_reset.sh
+      until curl -sf localhost:8083/connectors >/dev/null; do sleep 3; done
+      bash scripts/p7_cdc_sink.sh create
+      APPLY=1 bash scripts/p7_mutate_source.sh
+  p7_cdc_sink.sh defaults to diagnose, which is worth running first on its own;
+  the other two default to counting what they would change.
+
+  RESET=1 RUNS docker compose down -v. That destroys pgdata and rpdata, and with
+  them qc.order_status and every registered connector including Part 3s. Both
+  are fine by this point: Part 3s tables are full and step 12 has measured them.
+  Postgres re-initialises from the CSVs and Debezium snapshots 171,403 rows.
+
+  WHY THE RESET IS NOT OPTIONAL ON A REBUILD. The seven qc.qc.* topics survive a
+  teardown with their data, but so does _connect_offsets, so the sinks consumer
+  group is already at the end of every one of them. Register the sink against
+  that and each channel reports rowsInsertedCount 0 forever: the topics are full
+  and there is nothing left to deliver. Only a re-snapshot puts new records
+  after the committed offsets.
+
+  Then wait for the connector to drain before step 27:
+      bash scripts/p7_cdc_sink.sh status"
 "sql|What landed from the seven CDC topics|sql/p7_cdc_verify.sql"
 "sql|RAW to CORE, conformance and dedupe|sql/p7_core_conform.sql"
 "sql|Streams and SCD2|sql/p7_core_scd2.sql"
