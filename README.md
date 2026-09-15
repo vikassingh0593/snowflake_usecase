@@ -410,7 +410,7 @@ Streaming roughly 548,000 rows cost 0.0001 credits.
 | Constraint | Kind | Consequence |
 |---|---|---|
 | **Managed AI text functions mostly unavailable** | account tier | Twelve of fourteen refuse. Classification and embeddings are built as trained models instead. **Two summarisation functions do work** — the refusals name an underlying primitive rather than the function asked for, so the gate is per-primitive |
-| **Outbound network access unavailable** | account tier | Route 11 cannot be built. The network rule and the secret create successfully; only the integration binding them is refused. **A Git integration to the same public internet is permitted** — different integration type, different gate |
+| **Outbound network access unavailable** | account tier | Route 11 cannot be built. The network rule and the secret create successfully; only the integration binding them is refused — `509009 (0A000)`, reproduced exactly on a full rebuild. **A Git integration to the same public internet is permitted** — different integration type, different gate |
 | Enterprise-grade protection available | confirmed by creating | Policies attach directly to columns and rows |
 | Model registry asked for a library its own channel lacked | version skew | Worked around by embedding the library with the model |
 | Application runtime thirty releases behind its catalogue | version skew | The application detects features at runtime instead of assuming a version |
