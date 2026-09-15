@@ -78,11 +78,31 @@ ORDER  BY TOTAL DESC;
 -- The discipline that makes this possible cost nothing and is the only reason
 -- the question is answerable at all.
 -- =============================================================================
-SELECT COALESCE(NULLIF(SPLIT_PART(qh.QUERY_TAG, ':', 1), ''), '(untagged)') AS PART,
+SELECT CASE
+         -- Snowflake's own surfaces set a JSON query tag. Streamlit's is
+         -- {"StreamlitEngine": {...}}, and SPLIT_PART on ':' turned that into
+         -- a part named {"StreamlitEngine -- which then came TOP of this table
+         -- at 46% of attributed credits, above every real part. A tag that is
+         -- not of the form part:thing is not a part, and the fix is to say so
+         -- rather than to let it sort into the middle of the list unnoticed.
+         -- String handling, not TRY_PARSE_JSON: the only thing needed is the
+         -- first key, and a malformed tag should degrade rather than error.
+         WHEN LEFT(qh.QUERY_TAG, 1) = '{'
+           THEN 'vendor:' || LTRIM(SPLIT_PART(REPLACE(qh.QUERY_TAG, '"', ''), ':', 1), '{')
+         ELSE COALESCE(NULLIF(SPLIT_PART(qh.QUERY_TAG, ':', 1), ''), '(untagged)')
+       END                                                                 AS PART,
        COUNT(*)                                                            AS QUERIES,
        ROUND(SUM(qa.CREDITS_ATTRIBUTED_COMPUTE), 4)                        AS CREDITS,
        ROUND(SUM(qa.CREDITS_ATTRIBUTED_COMPUTE) * 100
-             / NULLIF(SUM(SUM(qa.CREDITS_ATTRIBUTED_COMPUTE)) OVER (), 0), 1) AS PCT
+             / NULLIF(SUM(SUM(qa.CREDITS_ATTRIBUTED_COMPUTE)) OVER (), 0), 1) AS PCT,
+       -- THIS TABLE HAS NO TIME WINDOW, which is deliberate -- the question is
+       -- what the whole thing cost -- but it is invisible in the output, and a
+       -- reader who has just watched a rebuild finish will read these as the
+       -- rebuild's numbers. They are not: they span every build in
+       -- ACCOUNT_USAGE retention, and with the three-hour lag noted above, a
+       -- run that finished minutes ago is barely in here at all.
+       MIN(qh.START_TIME)::DATE                                            AS FROM_DATE,
+       MAX(qh.START_TIME)::DATE                                            AS TO_DATE
 FROM   SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY qa
 JOIN   SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY             qh
        ON qh.QUERY_ID = qa.QUERY_ID
