@@ -60,8 +60,47 @@ fi
 # model in MART calls dbt_utils.generate_surrogate_key, so without this a fresh
 # clone fails on the first model with "'dbt_utils' is undefined", which names
 # the symptom and not the cause.
-if [ ! -d dbt/dbt_packages ] && [ "${1:-}" != "deps" ]; then
-  echo "== dbt_packages/ absent, resolving from package-lock.yml (once)"
+#
+# THE TEST IS FOR A RESOLVED PACKAGE, NOT FOR THE DIRECTORY. Those are different
+# states and the difference broke a build.
+#
+# dbt_utils ships its own .gitignore. Vendoring the package carried that file
+# into this repository, and git then applied a third-party package's ignore
+# rules to the act of committing that package. dbt_packages/dbt_utils/
+# integration_tests/.gitignore lists target/, dbt_modules/, logs/, .env/,
+# profiles.yml, package-lock.yml and dbt_internal_packages/ -- so six of
+# dbt_utils's own files went in untracked while 223 were committed. Commit
+# 982533f then deleted the 223 it could see. The six it never tracked stayed,
+# and git leaves a directory standing while anything is inside it:
+#
+#     dbt_packages/dbt_utils/integration_tests/profiles.yml
+#     dbt_packages/dbt_utils/integration_tests/package-lock.yml
+#     dbt_packages/dbt_utils/integration_tests/.env/{bigquery,postgres,redshift,snowflake}.env
+#
+# `[ ! -d dbt/dbt_packages ]` read that husk as a resolved package. deps was
+# skipped and the build died on "No dbt_project.yml found at expected path
+# .../dbt_utils" -- the same class of symptom-without-cause error this block
+# exists to prevent, produced by the guard meant to prevent it.
+#
+# Every installed package is a directory named for its package-lock.yml `name:`
+# and containing a dbt_project.yml, so that pair is what gets checked. No lock
+# file at all also counts as unresolved: deps writes one.
+deps_unresolved() {
+  [ -f dbt/package-lock.yml ] || return 0
+  local name
+  while read -r name; do
+    [ -f "dbt/dbt_packages/$name/dbt_project.yml" ] || return 0
+  done < <(sed -n 's/^[[:space:]]*-[[:space:]]*name:[[:space:]]*//p' dbt/package-lock.yml)
+  return 1
+}
+
+if [ "${1:-}" != "deps" ] && deps_unresolved; then
+  echo "== dbt_packages/ unresolved, installing from package-lock.yml (once)"
+  # A half-deleted dbt_packages/ is what gets here. dbt deps replaces a package
+  # directory it has a record of and ignores one it does not, so clear the whole
+  # thing first rather than install alongside the debris. dbt_project.yml already
+  # declares dbt_packages a clean-target; this is what `dbt clean` would remove.
+  rm -rf dbt/dbt_packages
   docker run --rm -v "$PWD":/work "$IMAGE" deps --profiles-dir . --target dev
 fi
 

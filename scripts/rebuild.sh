@@ -233,17 +233,52 @@ MANIFEST=(
   again. Gate 13 is the exception: Snowpipe auto-ingest fires on Event Grid
   notifications, and a blob already sitting in landing/ raises none."
 "sql|Directory table over the PDFs, mechanism 10|sql/p6_directory_docs.sql"
-"sql|External network access, mechanism 11|sql/p6_external_access.sql"
-"gate|Marketplace listing|Snowsight -> Data Products -> Marketplace. Acquire the free
-  listing named in sql/p6_marketplace.sql and mount it as QC_MARKETPLACE. There
-  is no SQL that accepts a listing's terms on your behalf."
+"tier|External network access, mechanism 11|sql/p6_external_access.sql :: External access is not supported for trial accounts -- error 509009, SQL state 0A000, raised by CREATE EXTERNAL ACCESS INTEGRATION. The network rule and the secret create successfully; only the integration binding them is refused, which is exactly what README section 11 records as a tier gate. Route 11 cannot be built here. Note that a git API integration to the same public internet IS permitted: different integration type, different gate. Continue to step 23."
+"gate|Marketplace listing|CHECK FIRST. sql/teardown.sql drops QCOMMERCE and QC_PROBE_TMP and no
+  other database, so a mount acquired by a previous build is still there and
+  this gate is a no-op, like gates 18 and 20:
+      snow sql -c qcpoc -q \"SHOW DATABASES LIKE 'FINANCE%'\" --format csv
+  A row whose kind is IMPORTED DATABASE and whose origin names another account
+  is the zero-copy mount. Go to step 24.
+
+  Otherwise, in Snowsight -> Data Products -> Marketplace:
+      search   Finance & Economics    (Snowflake Public Data Products,
+                                       formerly Cybersyn. Free, no trial)
+      Get      database FINANCE__ECONOMICS, which is the name
+               sql/p6_marketplace.sql expects
+      grant    query access to QC_ENGINEER and QC_ANALYST
+  There is no SQL that accepts a listing's terms on your behalf.
+
+  Any free listing exercises the same mechanism; this one is the pick because
+  it carries FX rates, and every amount in this platform is whole paise. If it
+  has been renamed, step 24 discovers what actually arrived and only two
+  identifiers change. Mind the warning in that file: a shared table can be
+  enormous, and SELECT * against one is the cheapest way to be surprised."
 "sql|Marketplace join, mechanism 12|sql/p6_marketplace.sql"
 "shell|write_pandas, mechanism 13|scripts/run_in_container.sh pandas"
-"gate|CDC|Debezium has to be pointed at a source that has moved:
-      bash scripts/p7_source_reset.sh
-      bash scripts/p7_cdc_sink.sh
-      bash scripts/p7_mutate_source.sh
-  Seven topics, one connector, deletes included."
+"gate|CDC|EVERY ONE OF THESE DEFAULTS TO A DRY RUN OR A READ. Without the
+  modifiers below they print what they would do, exit 0, and change nothing:
+      RESET=1 bash scripts/p7_source_reset.sh
+      until curl -sf localhost:8083/connectors >/dev/null; do sleep 3; done
+      bash scripts/p7_cdc_sink.sh create
+      APPLY=1 bash scripts/p7_mutate_source.sh
+  p7_cdc_sink.sh defaults to diagnose, which is worth running first on its own;
+  the other two default to counting what they would change.
+
+  RESET=1 RUNS docker compose down -v. That destroys pgdata and rpdata, and with
+  them qc.order_status and every registered connector including Part 3s. Both
+  are fine by this point: Part 3s tables are full and step 12 has measured them.
+  Postgres re-initialises from the CSVs and Debezium snapshots 171,403 rows.
+
+  WHY THE RESET IS NOT OPTIONAL ON A REBUILD. The seven qc.qc.* topics survive a
+  teardown with their data, but so does _connect_offsets, so the sinks consumer
+  group is already at the end of every one of them. Register the sink against
+  that and each channel reports rowsInsertedCount 0 forever: the topics are full
+  and there is nothing left to deliver. Only a re-snapshot puts new records
+  after the committed offsets.
+
+  Then wait for the connector to drain before step 27:
+      bash scripts/p7_cdc_sink.sh status"
 "sql|What landed from the seven CDC topics|sql/p7_cdc_verify.sql"
 "sql|RAW to CORE, conformance and dedupe|sql/p7_core_conform.sql"
 "sql|Streams and SCD2|sql/p7_core_scd2.sql"
@@ -259,7 +294,7 @@ MANIFEST=(
 "sql|Vectors, similarity, a second classifier|sql/p10_vectors.sql"
 "sql|The two approaches on the same 240|sql/p10_eval_compare.sql"
 "sql|SERVE, the contract the app reads|sql/p11_serve.sql"
-"shell|Deploy the console|scripts/p11_deploy.sh"
+"shell|Deploy the console|DEPLOY=1 scripts/p11_deploy.sh"
 "sql|Column and row protection|sql/p12_policies.sql"
 "sql|Act on what the classifier found|sql/p12_classify_response.sql"
 "sql|Quality rules and lineage|sql/p12_quality_lineage.sql"
@@ -268,13 +303,25 @@ MANIFEST=(
 "sql|Repair: governance broke the performance layer|sql/p12_serve_repair.sql"
 "sql|Close the two defects that would be exported|sql/p13_serve_harden.sql"
 "sql|The outbound share|sql/p13_share.sql"
-"gate|GitHub access token|The git integration authenticates with a fine-grained PAT,
-  Contents: read-only, on this repository alone. Create it at
-  github.com/settings/personal-access-tokens and have it ready -- p14_git.sql
-  creates the secret that holds it and prints where to paste it.
-  Also set the repository secrets the CI workflow reads: SNOWFLAKE_ACCOUNT,
-  SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY. The warehouse job skips itself when
-  SNOWFLAKE_ACCOUNT is absent, so CI stays green without them."
+"gate|CI repository secrets|NO ACCESS TOKEN IS NEEDED HERE. An earlier version of this gate asked for a
+  fine-grained PAT and said sql/p14_git.sql would create the secret that holds it
+  and print where to paste it. It does neither. The probe in that file reaches
+  GitHub over the PUBLIC repository URL with no credential at all, deliberately,
+  so that a refusal reads as the feature being gated rather than as a token
+  problem. Expect VERDICT = GATED on the api integration for git row: section 1
+  Finding 3 is that external access integrations are refused on this account, and
+  a git repository stage is the same gate on a different object. A refusal there
+  is the measurement, not a failure -- steps 52 and 53 are written to record it.
+
+  ON A REBUILD THIS GATE IS OPTIONAL, like gates 18 and 20. What it actually sets
+  is three repository secrets, read only by .github/workflows/ci.yml and by
+  nothing in this build:
+      github.com/vikassingh0593/snowflake_usecase/settings/secrets/actions
+      SNOWFLAKE_ACCOUNT   SNOWFLAKE_USER   SNOWFLAKE_PRIVATE_KEY
+  SNOWFLAKE_PRIVATE_KEY is the CI key pair created in step 4 -- the PRIVATE half,
+  rsa_ci.p8, pasted whole, header and footer lines included. The warehouse job
+  skips itself when SNOWFLAKE_ACCOUNT is absent, so CI stays green without any of
+  them and the rebuild does not depend on this step."
 "sql|Git integration and repository|sql/p14_git.sql"
 "sql|Deploy from git|sql/p14_deploy.sql"
 "gate|Account budget|Snowsight -> Admin -> Cost Management -> Budgets -> Account Budget
@@ -333,8 +380,9 @@ cmd_plan() {
             printf '  %2d  %sGATE%s  %s\n' "$i" "$_Y" "$_0" "$label"
             continue
         fi
-        local shown="$payload"
+        local shown="${payload%% :: *}"
         [ "$kind" = dbt ] && shown="scripts/dbt.sh $payload"
+        [ "$kind" = tier ] && shown="$shown   (expected to be refused)"
         printf '  %2d  %-5s %s\n          %s%s%s\n' \
                "$i" "$(printf '%s' "$kind" | tr '[:lower:]' '[:upper:]')" \
                "$label" "$_D" "$shown" "$_0"
@@ -444,6 +492,22 @@ cmd_build() {
                 dbt)   note "scripts/dbt.sh $payload" ;;
                 shell) note "$payload" ;;
             esac
+            continue
+        fi
+
+        # A tier step is one this account is known to refuse. Its payload carries
+        # the reason after " :: " so the refusal reads as a recorded limitation
+        # rather than a build failure. If it ever succeeds, say so -- that means
+        # the account changed and README section 11 is out of date.
+        if [ "$kind" = tier ]; then
+            if snow_file "${payload%% :: *}"; then
+                ok "$label"
+                warn "this step was expected to be refused on this account and was not"
+                note "README section 11 needs updating"
+            else
+                warn "$label — refused, and expected to be"
+                note "${payload#* :: }"
+            fi
             continue
         fi
 
