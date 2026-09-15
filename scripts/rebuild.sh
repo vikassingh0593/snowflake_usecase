@@ -196,7 +196,10 @@ MANIFEST=(
 "shell|Sink connector, mechanisms 1 and 3|scripts/p3_sink.sh v4 && scripts/p3_sink.sh v3"
 "shell|Snowpipe Streaming SDK, mechanism 2|scripts/run_in_container.sh stream"
 "sql|Mechanisms 1 vs 2 vs 3 on identical input|sql/p3_benchmark.sql"
-"gate|Clickstream upload|In Azure Cloud Shell:
+"gate|Clickstream upload|In Azure Cloud Shell. It is ephemeral -- no files survive the session -- so
+  the repository has to be cloned each time. It is public, so no auth:
+      git clone https://github.com/vikassingh0593/snowflake_usecase.git
+      cd snowflake_usecase
       bash scripts/upload_source.sh clickstream
   One blob at a time, so Event Grid raises one notification per file and
   COPY_HISTORY shows N loads instead of one opaque one."
@@ -204,10 +207,16 @@ MANIFEST=(
 "sql|Snowpipe REST, mechanism 5|sql/p4_snowpipe_rest.sql"
 "shell|REST ingest driver|python3 scripts/p4_rest_ingest.py"
 "sql|COPY and VALIDATE, mechanisms 6 and 7|sql/p4_copy_parquet.sql"
-"gate|Settlement upload|In Azure Cloud Shell:
+"gate|Settlement upload|In Azure Cloud Shell. It is ephemeral -- no files survive the session -- so
+  the repository has to be cloned each time. It is public, so no auth:
+      git clone https://github.com/vikassingh0593/snowflake_usecase.git
+      cd snowflake_usecase
       bash scripts/upload_source.sh settlement"
 "sql|External table and Iceberg, mechanisms 8 and 9|sql/p5_external_iceberg.sql"
-"gate|Complaint PDF upload|In Azure Cloud Shell:
+"gate|Complaint PDF upload|In Azure Cloud Shell. It is ephemeral -- no files survive the session -- so
+  the repository has to be cloned each time. It is public, so no auth:
+      git clone https://github.com/vikassingh0593/snowflake_usecase.git
+      cd snowflake_usecase
       bash scripts/upload_source.sh complaints
   _truth.csv stays behind. It is the answer key for Part 10 and a label sitting
   in RAW next to the text it labels is how a model scores 100% on nothing."
